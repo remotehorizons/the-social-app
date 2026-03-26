@@ -167,3 +167,11 @@ Mobile app:
 Rust backend:
 - `cd core-rs`
 - `cargo test`
+
+## Store Builds
+
+Store build pipeline files:
+- `mobile/app.json`
+- `mobile/eas.json`
+- `.github/workflows/store-build.yml`
+- `docs/store-release.md`
