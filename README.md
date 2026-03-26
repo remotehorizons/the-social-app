@@ -6,6 +6,9 @@ A peer-to-peer social network with:
 - feed limited to direct connections (friends/follows)
 - controlled scrolling and bandwidth budget
 
+Repository:
+- GitHub: `remotehorizons/the-social-app`
+
 ## 1) Core Product Rules
 
 1. Text only
