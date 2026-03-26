@@ -154,3 +154,14 @@ A text-first mobile starter now exists at:
 - The mobile app now reads and writes through `mobile/src/core/meshCore.ts`.
 - In Expo/JS runtime, it uses a SQLite adapter so the app is persistent and no longer depends on mock data.
 - If a native module named `MeshSocialCore` is present later, the same app interface will switch to the Rust core path.
+
+## Testing
+
+Mobile app:
+- `cd mobile`
+- `npm test`
+- `npm run typecheck`
+
+Rust backend:
+- `cd core-rs`
+- `cargo test`

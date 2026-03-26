@@ -12,3 +12,6 @@ meshsocial-identity = { path = "../identity" }
 meshsocial-protocol = { path = "../protocol" }
 meshsocial-store = { path = "../store" }
 meshsocial-feed = { path = "../feed" }
+
+[dev-dependencies]
+tempfile.workspace = true
