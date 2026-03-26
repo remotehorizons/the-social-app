@@ -1,0 +1,56 @@
+<mxfile host="app.diagrams.net" modified="2026-02-19T12:00:00.000Z" agent="codex" version="24.7.17">
+  <diagram id="overview" name="P2P Backend Overview">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="2" value="Mobile App (React Native)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#333333;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="60" y="80" width="240" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="3" value="Rust FFI Bridge" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6e6e6;strokeColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="360" y="80" width="180" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="4" value="Identity Crate\n(Ed25519 keys/signatures)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9d9d9;strokeColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="620" y="40" width="230" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="5" value="Store Crate\n(SQLite + indexes)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9d9d9;strokeColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="620" y="140" width="230" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="6" value="Feed Crate\n(follow-only pagination)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9d9d9;strokeColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="900" y="40" width="240" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="7" value="Sync Crate\n(index diff + selective fetch)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9d9d9;strokeColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="900" y="140" width="240" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="8" value="Peer A" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="1230" y="40" width="120" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="9" value="Peer B" style="ellipse;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="1230" y="130" width="120" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="10" style="endArrow=block;html=1;strokeColor=#333333;" edge="1" parent="1" source="2" target="3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="11" style="endArrow=block;html=1;strokeColor=#333333;" edge="1" parent="1" source="3" target="4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="12" style="endArrow=block;html=1;strokeColor=#333333;" edge="1" parent="1" source="3" target="5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="13" style="endArrow=block;html=1;strokeColor=#333333;" edge="1" parent="1" source="5" target="6">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="14" style="endArrow=block;html=1;strokeColor=#333333;" edge="1" parent="1" source="5" target="7">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="15" value="P2P transport" style="endArrow=block;html=1;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="7" target="8">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="16" value="P2P transport" style="endArrow=block;html=1;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="7" target="9">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

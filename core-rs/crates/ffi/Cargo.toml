@@ -1,0 +1,14 @@
+[package]
+name = "meshsocial-ffi"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+hex.workspace = true
+sha2.workspace = true
+meshsocial-identity = { path = "../identity" }
+meshsocial-protocol = { path = "../protocol" }
+meshsocial-store = { path = "../store" }
+meshsocial-feed = { path = "../feed" }

@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "MeshSocial",
+    "slug": "meshsocial",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "assetBundlePatterns": [
+      "**/*"
+    ]
+  }
+}

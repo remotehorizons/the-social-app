@@ -1,0 +1,11 @@
+[package]
+name = "meshsocial-store"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+meshsocial-protocol = { path = "../protocol" }
+thiserror.workspace = true
+rusqlite.workspace = true

@@ -1,0 +1,51 @@
+<mxfile host="app.diagrams.net" modified="2026-02-19T12:00:00.000Z" agent="codex" version="24.7.17">
+  <diagram id="security" name="Security Boundaries">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="2" value="Device Boundary" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#333333;fillColor=none;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="80" width="980" height="620" as="geometry"/>
+        </mxCell>
+        <mxCell id="3" value="App Process" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="130" y="140" width="260" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="4" value="Rust Core" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6e6e6;strokeColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="450" y="140" width="260" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="5" value="Secure Key Storage\n(Keychain/Keystore)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9d9d9;strokeColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="770" y="140" width="240" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="6" value="SQLite (local encrypted at rest)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d9d9d9;strokeColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="450" y="320" width="260" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="7" value="Validation Gateway\n(schema + sig + policy checks)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="450" y="490" width="260" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="8" value="Remote Peers (Untrusted Network)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="1130" y="290" width="320" height="140" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="20" value="FFI calls" style="endArrow=block;html=1;strokeColor=#333333;" edge="1" parent="1" source="3" target="4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="21" value="sign/verify" style="endArrow=block;html=1;strokeColor=#333333;" edge="1" parent="1" source="4" target="5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="22" value="read/write" style="endArrow=block;html=1;strokeColor=#333333;" edge="1" parent="1" source="4" target="6">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="23" value="ingress pipeline" style="endArrow=block;html=1;strokeColor=#333333;" edge="1" parent="1" source="8" target="7">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="24" value="accepted events" style="endArrow=block;html=1;strokeColor=#333333;" edge="1" parent="1" source="7" target="6">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="25" value="rejected events" style="endArrow=open;html=1;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="7" target="8">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
