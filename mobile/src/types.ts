@@ -14,3 +14,24 @@ export type Identity = {
   handle: string;
   displayName: string;
 };
+
+export type ConversationPreview = {
+  peerPubkey: string;
+  peerHandle: string;
+  peerDisplayName: string;
+  lastMessageBody: string;
+  lastMessageAtMs: number;
+  lastMessageAt: string;
+  unreadCount: number;
+};
+
+export type DirectMessage = {
+  id: string;
+  conversationId: string;
+  senderPubkey: string;
+  recipientPubkey: string;
+  body: string;
+  createdAtMs: number;
+  createdAt: string;
+  isLocalAuthor: boolean;
+};
