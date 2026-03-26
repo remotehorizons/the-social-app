@@ -1,5 +1,7 @@
 # MeshSocial (Text-Only MVP)
 
+[![CI](https://github.com/remotehorizons/the-social-app/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/remotehorizons/the-social-app/actions/workflows/ci.yml)
+
 A peer-to-peer social network with:
 - no central timeline server
 - text-only posts (small payloads)

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react-native";
 import { AppScreen } from "../../App";
 import { MeshCore } from "../core/meshCore";
+import { themes } from "../theme";
 import { Identity, Post } from "../types";
 
 const identity: Identity = {
@@ -116,5 +117,27 @@ describe("AppScreen", () => {
     await waitFor(() => {
       expect(core.getFeedPage).toHaveBeenCalledWith(1, 10);
     });
+  });
+
+  it("toggles between light and dark mode", async () => {
+    const { core } = createMockCore();
+
+    render(<AppScreen core={core} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("first network post")).toBeOnTheScreen();
+    });
+
+    expect(screen.getByTestId("app-shell")).toHaveStyle({
+      backgroundColor: themes.light.bg
+    });
+    expect(screen.getByText("DARK MODE")).toBeOnTheScreen();
+
+    fireEvent.press(screen.getByTestId("mode-toggle"));
+
+    expect(screen.getByTestId("app-shell")).toHaveStyle({
+      backgroundColor: themes.dark.bg
+    });
+    expect(screen.getByText("LIGHT MODE")).toBeOnTheScreen();
   });
 });
