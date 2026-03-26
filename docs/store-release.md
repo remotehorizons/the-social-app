@@ -67,6 +67,16 @@ For an internal Android test build:
 npx eas build --platform android --profile preview
 ```
 
+Convenience scripts are also available:
+
+```sh
+npm run build:preview:android
+npm run build:production:ios
+npm run build:production:android
+npm run submit:production:ios
+npm run submit:production:android
+```
+
 ## 5. GitHub Actions Build
 
 Use the `Store Build` workflow in the GitHub `Actions` tab.

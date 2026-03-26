@@ -2,6 +2,7 @@
   "expo": {
     "name": "MeshSocial",
     "slug": "meshsocial",
+    "owner": "remotehorizons",
     "version": "0.1.0",
     "scheme": "meshsocial",
     "orientation": "portrait",

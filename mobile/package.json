@@ -8,6 +8,11 @@
     "ios": "expo run:ios",
     "android": "expo run:android",
     "web": "expo start --web",
+    "build:preview:android": "eas build --platform android --profile preview",
+    "build:production:ios": "eas build --platform ios --profile production",
+    "build:production:android": "eas build --platform android --profile production",
+    "submit:production:ios": "eas submit --platform ios --profile production",
+    "submit:production:android": "eas submit --platform android --profile production",
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "test:watch": "jest --watch"
