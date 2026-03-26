@@ -10,12 +10,21 @@ import {
   View
 } from "react-native";
 import { PostCard } from "./src/components/PostCard";
-import { createMeshCore } from "./src/core/meshCore";
+import { createMeshCore, MeshCore } from "./src/core/meshCore";
 import { theme } from "./src/theme";
 import { Identity, Post } from "./src/types";
 
+type AppScreenProps = {
+  core: MeshCore;
+};
+
 export default function App() {
   const [core] = useState(() => createMeshCore());
+
+  return <AppScreen core={core} />;
+}
+
+export function AppScreen({ core }: AppScreenProps) {
   const [composerText, setComposerText] = useState("");
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
@@ -134,6 +143,7 @@ export default function App() {
             maxLength={theme.postCharLimit}
             value={composerText}
             onChangeText={setComposerText}
+            testID="composer-input"
           />
           <View style={styles.composerFooter}>
             <Text style={styles.counter}>{remainingChars} chars left</Text>
@@ -144,6 +154,7 @@ export default function App() {
                 styles.postButton,
                 (!canPost || isPosting || pressed) && styles.postButtonDisabled
               ]}
+              testID="post-button"
             >
               <Text style={styles.postButtonText}>
                 {isPosting ? "POSTING" : "POST"}
@@ -176,6 +187,7 @@ export default function App() {
                 <Pressable
                   onPress={() => void loadOlder()}
                   style={styles.loadMoreButton}
+                  testID="load-older-button"
                 >
                   <Text style={styles.loadMoreText}>
                     {isLoadingOlder ? "LOADING" : "LOAD OLDER"}
