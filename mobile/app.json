@@ -2,12 +2,22 @@
   "expo": {
     "name": "MeshSocial",
     "slug": "meshsocial",
+    "owner": "remotehorizons",
     "version": "0.1.0",
+    "scheme": "meshsocial",
     "orientation": "portrait",
     "platforms": [
       "ios",
       "android"
     ],
+    "ios": {
+      "bundleIdentifier": "com.remotehorizons.meshsocial",
+      "buildNumber": "1"
+    },
+    "android": {
+      "package": "com.remotehorizons.meshsocial",
+      "versionCode": 1
+    },
     "assetBundlePatterns": [
       "**/*"
     ]
