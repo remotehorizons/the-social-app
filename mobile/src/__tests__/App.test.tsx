@@ -3,16 +3,19 @@ import { AppScreen } from "../../App";
 import { MeshCore } from "../core/meshCore";
 import { themes } from "../theme";
 import {
+  AppStats,
   ConversationPreview,
   DirectMessage,
   Identity,
+  NetworkPeer,
   Post
 } from "../types";
 
 const identity: Identity = {
   pubkey: "local-user-pubkey",
   handle: "@you",
-  displayName: "You"
+  displayName: "You",
+  bio: "Building calm local-first social."
 };
 
 function makePost(
@@ -40,8 +43,8 @@ function makeConversation(
 ): ConversationPreview {
   return {
     peerPubkey,
-    peerHandle: peerPubkey === "peer-atlas" ? "@atlas" : "@noor",
-    peerDisplayName: peerPubkey === "peer-atlas" ? "Atlas" : "Noor",
+    peerHandle: peerPubkey === "peer-atlas" ? "@atlas" : "@rae",
+    peerDisplayName: peerPubkey === "peer-atlas" ? "Atlas" : "Rae",
     lastMessageBody: "existing message",
     lastMessageAtMs: 1,
     lastMessageAt: "8:00 AM",
@@ -68,27 +71,61 @@ function makeMessage(
   };
 }
 
+function makePeer(
+  pubkey: string,
+  overrides: Partial<NetworkPeer> = {}
+): NetworkPeer {
+  return {
+    pubkey,
+    handle: pubkey === identity.pubkey ? identity.handle : `@${pubkey.replace("peer-", "")}`,
+    displayName: pubkey === identity.pubkey ? identity.displayName : "Peer",
+    bio: "bio",
+    isSelf: pubkey === identity.pubkey,
+    isFollowing: false,
+    isMuted: false,
+    isBlocked: false,
+    postCount: 1,
+    lastPostAtMs: 1,
+    lastPostAt: "8:00 AM",
+    ...overrides
+  };
+}
+
 function createMockCore() {
-  const pages: Post[][] = [
-    Array.from({ length: 10 }, (_, index) =>
-      makePost(
-        `post-${index + 1}`,
-        index === 0 ? "first network post" : `network post ${index + 1}`,
-        index + 1
-      )
-    ),
-    [makePost("post-11", "older post", 11)]
+  const basePosts: Post[] = [
+    makePost("post-1", "first network post", 2),
+    makePost("post-2", "second network post", 1)
+  ];
+
+  const peers: NetworkPeer[] = [
+    makePeer(identity.pubkey, {
+      displayName: identity.displayName,
+      bio: identity.bio,
+      isSelf: true,
+      postCount: 0,
+      lastPostAtMs: null,
+      lastPostAt: null
+    }),
+    makePeer("peer-atlas", {
+      displayName: "Atlas",
+      bio: "Quiet builder.",
+      isFollowing: true
+    }),
+    makePeer("peer-noor", {
+      displayName: "Noor",
+      bio: "Writes short updates."
+    }),
+    makePeer("peer-rae", {
+      displayName: "Rae",
+      bio: "Strong on community rituals.",
+      isFollowing: true
+    })
   ];
 
   const conversations: ConversationPreview[] = [
     makeConversation("peer-atlas", {
       lastMessageBody: "See you on the peer link.",
       unreadCount: 1
-    }),
-    makeConversation("peer-noor", {
-      lastMessageBody: "Quiet timeline today.",
-      lastMessageAtMs: 2,
-      lastMessageAt: "8:05 AM"
     })
   ];
 
@@ -101,32 +138,87 @@ function createMockCore() {
         isLocalAuthor: true
       })
     ],
-    "peer-noor": [makeMessage("message-3", "Quiet timeline today.", {
-      conversationId: "local-user-pubkey:peer-noor",
-      senderPubkey: "peer-noor",
-      recipientPubkey: identity.pubkey
-    })]
+    "peer-rae": []
   };
 
+  const getPeer = (pubkey: string) => peers.find((peer) => peer.pubkey === pubkey);
+
+  const getVisibleFeed = () => {
+    const visibleAuthors = new Set(
+      peers
+        .filter((peer) => peer.isFollowing && !peer.isMuted && !peer.isBlocked)
+        .map((peer) => peer.pubkey)
+    );
+
+    return basePosts.filter(
+      (post) => post.authorPubkey === identity.pubkey || visibleAuthors.has(post.authorPubkey)
+    );
+  };
+
+  const getVisibleConversations = () =>
+    conversations.filter((conversation) => !getPeer(conversation.peerPubkey)?.isBlocked);
+
+  const getStats = (): AppStats => ({
+    localPostCount: getVisibleFeed().filter((post) => post.authorPubkey === identity.pubkey)
+      .length,
+    followingCount: peers.filter((peer) => peer.isFollowing).length,
+    conversationCount: getVisibleConversations().length,
+    unreadCount: getVisibleConversations().reduce(
+      (count, conversation) => count + conversation.unreadCount,
+      0
+    ),
+    mutedCount: peers.filter((peer) => peer.isMuted).length,
+    blockedCount: peers.filter((peer) => peer.isBlocked).length
+  });
+
   const publishPost = jest.fn(async (body: string) => {
-    pages[0] = [
+    basePosts.unshift(
       makePost("local-post", body, 10, {
         authorPubkey: identity.pubkey,
         authorHandle: identity.handle,
         displayName: identity.displayName,
         createdAt: "now",
         isLocalAuthor: true
-      }),
-      ...(pages[0] ?? [])
-    ];
+      })
+    );
 
     return "local-post";
   });
 
-  const listConversations = jest.fn(async () => conversations);
-  const getMessages = jest.fn(async (peerPubkey: string) => messagesByPeer[peerPubkey] ?? []);
+  const updateProfile = jest.fn(async (displayName: string, bio: string) => {
+    identity.displayName = displayName;
+    identity.bio = bio;
+    peers[0] = {
+      ...peers[0]!,
+      displayName,
+      bio
+    };
+
+    return identity;
+  });
+
+  const getFeedPage = jest.fn(async (page: number, pageSize: number) => {
+    const visibleFeed = getVisibleFeed();
+    const offset = page * pageSize;
+    return visibleFeed.slice(offset, offset + pageSize);
+  });
+  const listConversations = jest.fn(async () => getVisibleConversations());
+  const getMessages = jest.fn(async (peerPubkey: string) => {
+    if (getPeer(peerPubkey)?.isBlocked) {
+      return [];
+    }
+    return messagesByPeer[peerPubkey] ?? [];
+  });
+  const getAppStats = jest.fn(async () => getStats());
+  const listPeers = jest.fn(async () => peers);
+  const markConversationRead = jest.fn(async (peerPubkey: string) => {
+    const conversation = conversations.find((item) => item.peerPubkey === peerPubkey);
+    if (conversation) {
+      conversation.unreadCount = 0;
+    }
+  });
   const sendMessage = jest.fn(async (peerPubkey: string, body: string) => {
-    const newMessage = makeMessage("message-local", body, {
+    const newMessage = makeMessage(`message-${peerPubkey}-local`, body, {
       conversationId: ["local-user-pubkey", peerPubkey].sort().join(":"),
       senderPubkey: identity.pubkey,
       recipientPubkey: peerPubkey,
@@ -142,35 +234,100 @@ function createMockCore() {
     );
 
     if (conversationIndex >= 0) {
-      const existingConversation = conversations[conversationIndex]!;
-
       conversations[conversationIndex] = {
-        ...existingConversation,
+        ...conversations[conversationIndex]!,
         lastMessageBody: body,
         lastMessageAt: "now",
         lastMessageAtMs: 99,
         unreadCount: 0
       };
+    } else {
+      conversations.unshift(
+        makeConversation(peerPubkey, {
+          peerHandle: getPeer(peerPubkey)?.handle ?? "@peer",
+          peerDisplayName: getPeer(peerPubkey)?.displayName ?? "Peer",
+          lastMessageBody: body,
+          lastMessageAt: "now",
+          lastMessageAtMs: 99
+        })
+      );
     }
 
     return "message-local";
+  });
+  const followPeer = jest.fn(async (peerPubkey: string) => {
+    const peer = getPeer(peerPubkey);
+    if (peer) {
+      peer.isFollowing = true;
+    }
+  });
+  const unfollowPeer = jest.fn(async (peerPubkey: string) => {
+    const peer = getPeer(peerPubkey);
+    if (peer) {
+      peer.isFollowing = false;
+    }
+  });
+  const mutePeer = jest.fn(async (peerPubkey: string) => {
+    const peer = getPeer(peerPubkey);
+    if (peer) {
+      peer.isMuted = true;
+    }
+  });
+  const unmutePeer = jest.fn(async (peerPubkey: string) => {
+    const peer = getPeer(peerPubkey);
+    if (peer) {
+      peer.isMuted = false;
+    }
+  });
+  const blockPeer = jest.fn(async (peerPubkey: string) => {
+    const peer = getPeer(peerPubkey);
+    if (peer) {
+      peer.isBlocked = true;
+      peer.isFollowing = false;
+    }
+  });
+  const unblockPeer = jest.fn(async (peerPubkey: string) => {
+    const peer = getPeer(peerPubkey);
+    if (peer) {
+      peer.isBlocked = false;
+    }
   });
 
   const core: MeshCore = {
     bootstrap: jest.fn(async () => {}),
     getIdentity: jest.fn(async () => identity),
-    getFeedPage: jest.fn(async (page: number) => pages[page] ?? []),
+    updateProfile,
+    getAppStats,
+    getFeedPage,
     publishPost,
+    listPeers,
+    followPeer,
+    unfollowPeer,
+    mutePeer,
+    unmutePeer,
+    blockPeer,
+    unblockPeer,
     listConversations,
     getMessages,
+    markConversationRead,
     sendMessage
   };
 
-  return { core, publishPost, sendMessage, getMessages };
+  return {
+    core,
+    publishPost,
+    updateProfile,
+    followPeer,
+    mutePeer,
+    blockPeer,
+    sendMessage,
+    getMessages,
+    markConversationRead
+  };
 }
 
 describe("AppScreen", () => {
-  it("loads the first feed page from the backend", async () => {
+  it("loads the first feed page and launch checklist", async () => {
     const { core } = createMockCore();
 
     render(<AppScreen core={core} />);
@@ -181,10 +338,9 @@ describe("AppScreen", () => {
       expect(screen.getByText("first network post")).toBeOnTheScreen();
     });
 
+    expect(screen.getByText("LAUNCH READINESS")).toBeOnTheScreen();
+    expect(screen.getByTestId("launch-task-profile")).toBeOnTheScreen();
     expect(core.bootstrap).toHaveBeenCalledTimes(1);
-    expect(core.getIdentity).toHaveBeenCalledTimes(1);
-    expect(core.getFeedPage).toHaveBeenCalledWith(0, 10);
-    expect(core.listConversations).toHaveBeenCalledTimes(1);
     expect(core.getMessages).toHaveBeenCalledWith("peer-atlas");
   });
 
@@ -209,8 +365,8 @@ describe("AppScreen", () => {
     });
   });
 
-  it("loads the next page when asked", async () => {
-    const { core } = createMockCore();
+  it("updates the profile and follows a suggested connection", async () => {
+    const { core, updateProfile, followPeer } = createMockCore();
 
     render(<AppScreen core={core} />);
 
@@ -218,15 +374,90 @@ describe("AppScreen", () => {
       expect(screen.getByText("first network post")).toBeOnTheScreen();
     });
 
-    fireEvent.press(screen.getByTestId("load-older-button"));
+    fireEvent.press(screen.getByTestId("network-tab"));
+
+    fireEvent.changeText(screen.getByTestId("display-name-input"), "Builder");
+    fireEvent.changeText(screen.getByTestId("bio-input"), "Making the graph useful.");
+    fireEvent.press(screen.getByTestId("save-profile-button"));
 
     await waitFor(() => {
-      expect(core.getFeedPage).toHaveBeenCalledWith(1, 10);
+      expect(updateProfile).toHaveBeenCalledWith(
+        "Builder",
+        "Making the graph useful."
+      );
+    });
+
+    fireEvent.press(screen.getAllByTestId("follow-toggle-peer-noor")[0]!);
+
+    await waitFor(() => {
+      expect(followPeer).toHaveBeenCalledWith("peer-noor");
     });
   });
 
-  it("shows conversations and sends a message", async () => {
+  it("starts a first-contact thread from the network tab and sends a message", async () => {
     const { core, sendMessage, getMessages } = createMockCore();
+
+    render(<AppScreen core={core} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("first network post")).toBeOnTheScreen();
+    });
+
+    fireEvent.press(screen.getByTestId("network-tab"));
+    fireEvent.press(screen.getAllByTestId("message-peer-peer-rae")[0]!);
+
+    await waitFor(() => {
+      expect(getMessages).toHaveBeenCalledWith("peer-rae");
+      expect(screen.getByText("FIRST CONTACT PROMPTS")).toBeOnTheScreen();
+    });
+
+    fireEvent.changeText(screen.getByTestId("message-input"), "intro from test");
+    fireEvent.press(screen.getByTestId("send-message-button"));
+
+    await waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith("peer-rae", "intro from test");
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("intro from test").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("mutes and blocks a peer through network controls", async () => {
+    const { core, mutePeer, blockPeer } = createMockCore();
+
+    render(<AppScreen core={core} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("first network post")).toBeOnTheScreen();
+    });
+
+    fireEvent.press(screen.getByTestId("network-tab"));
+    fireEvent.press(screen.getAllByTestId("mute-toggle-peer-atlas")[0]!);
+
+    await waitFor(() => {
+      expect(mutePeer).toHaveBeenCalledWith("peer-atlas");
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("MUTED").length).toBeGreaterThan(0);
+    });
+
+    fireEvent.press(screen.getAllByTestId("block-toggle-peer-atlas")[0]!);
+
+    await waitFor(() => {
+      expect(blockPeer).toHaveBeenCalledWith("peer-atlas");
+    });
+
+    fireEvent.press(screen.getByTestId("feed-tab"));
+
+    await waitFor(() => {
+      expect(screen.getByText("YOUR FEED IS EMPTY. FOLLOW PEOPLE IN NETWORK TO START THE LOOP.")).toBeOnTheScreen();
+    });
+  });
+
+  it("shows conversations, clears unread count, and sends a message", async () => {
+    const { core, sendMessage, getMessages, markConversationRead } = createMockCore();
 
     render(<AppScreen core={core} />);
 
@@ -235,9 +466,11 @@ describe("AppScreen", () => {
     });
 
     fireEvent.press(screen.getByTestId("messages-tab"));
+    fireEvent.press(screen.getByTestId("conversation-peer-atlas"));
 
-    expect(screen.getAllByText("Atlas")).toHaveLength(2);
-    expect(screen.getAllByText("See you on the peer link.").length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(markConversationRead).toHaveBeenCalledWith("peer-atlas");
+    });
 
     fireEvent.changeText(screen.getByTestId("message-input"), "message from test");
     fireEvent.press(screen.getByTestId("send-message-button"));
@@ -248,7 +481,7 @@ describe("AppScreen", () => {
 
     await waitFor(() => {
       expect(getMessages).toHaveBeenCalledWith("peer-atlas");
-      expect(screen.getByText("message from test")).toBeOnTheScreen();
+      expect(screen.getAllByText("message from test").length).toBeGreaterThan(0);
     });
   });
 

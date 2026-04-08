@@ -1,33 +1,60 @@
 import { NativeModules } from "react-native";
 import * as SQLite from "expo-sqlite";
 import {
+  AppStats,
   ConversationPreview,
   DirectMessage,
   Identity,
+  NetworkPeer,
   Post
 } from "../types";
 
 type MeshCore = {
   bootstrap(): Promise<void>;
   getIdentity(): Promise<Identity>;
+  updateProfile(displayName: string, bio: string): Promise<Identity>;
+  getAppStats(): Promise<AppStats>;
   getFeedPage(page: number, pageSize: number): Promise<Post[]>;
   publishPost(body: string): Promise<string>;
+  listPeers(): Promise<NetworkPeer[]>;
+  followPeer(peerPubkey: string): Promise<void>;
+  unfollowPeer(peerPubkey: string): Promise<void>;
+  mutePeer(peerPubkey: string): Promise<void>;
+  unmutePeer(peerPubkey: string): Promise<void>;
+  blockPeer(peerPubkey: string): Promise<void>;
+  unblockPeer(peerPubkey: string): Promise<void>;
   listConversations(): Promise<ConversationPreview[]>;
   getMessages(peerPubkey: string): Promise<DirectMessage[]>;
+  markConversationRead(peerPubkey: string): Promise<void>;
   sendMessage(peerPubkey: string, body: string): Promise<string>;
 };
 
 type NativeMeshSocialCoreModule = {
   bootstrap?(): Promise<void>;
   getIdentity?(): Promise<Identity>;
+  updateProfile?(displayName: string, bio: string): Promise<Identity>;
+  getAppStats?(): Promise<AppStats>;
   getFeedPage?(page: number, pageSize: number): Promise<Post[]>;
   publishPost?(body: string): Promise<string>;
+  listPeers?(): Promise<NetworkPeer[]>;
+  followPeer?(peerPubkey: string): Promise<void>;
+  unfollowPeer?(peerPubkey: string): Promise<void>;
+  mutePeer?(peerPubkey: string): Promise<void>;
+  unmutePeer?(peerPubkey: string): Promise<void>;
+  blockPeer?(peerPubkey: string): Promise<void>;
+  unblockPeer?(peerPubkey: string): Promise<void>;
   listConversations?(): Promise<ConversationPreview[]>;
   getMessages?(peerPubkey: string): Promise<DirectMessage[]>;
+  markConversationRead?(peerPubkey: string): Promise<void>;
   sendMessage?(peerPubkey: string, body: string): Promise<string>;
 };
 
-type ProfileRecord = Identity;
+type ProfileRecord = {
+  pubkey: string;
+  handle: string;
+  display_name: string;
+  bio: string | null;
+};
 
 type PostRecord = {
   id: string;
@@ -56,20 +83,66 @@ type MessageRecord = {
   created_at_ms: number;
 };
 
+type PeerRecord = {
+  pubkey: string;
+  handle: string;
+  display_name: string;
+  bio: string | null;
+  is_following: number;
+  is_muted: number;
+  is_blocked: number;
+  post_count: number;
+  last_post_at_ms: number | null;
+};
+
 const DB_NAME = "meshsocial.db";
 
 const localIdentity: Identity = {
   pubkey: "local-user-pubkey",
   handle: "@you",
-  displayName: "You"
+  displayName: "You",
+  bio: "Building a calmer peer-to-peer social graph."
 };
 
-const seedProfiles: ProfileRecord[] = [
+const defaultFriendIdentity: Identity = {
+  pubkey: "peer-blue-penguin",
+  handle: "@bluepenguin",
+  displayName: "Blue Penguin",
+  bio: "Default friend helping new installs feel alive."
+};
+
+const seedProfiles: Identity[] = [
   localIdentity,
-  { pubkey: "peer-atlas", handle: "@atlas", displayName: "Atlas" },
-  { pubkey: "peer-noor", handle: "@noor", displayName: "Noor" },
-  { pubkey: "peer-lin", handle: "@lin", displayName: "Lin" },
-  { pubkey: "peer-rae", handle: "@rae", displayName: "Rae" }
+  defaultFriendIdentity,
+  {
+    pubkey: "peer-atlas",
+    handle: "@atlas",
+    displayName: "Atlas",
+    bio: "Quiet builder shipping local-first systems."
+  },
+  {
+    pubkey: "peer-noor",
+    handle: "@noor",
+    displayName: "Noor",
+    bio: "Writes short updates and disappears back into deep work."
+  },
+  {
+    pubkey: "peer-lin",
+    handle: "@lin",
+    displayName: "Lin",
+    bio: "Testing tiny packets, strict budgets, and humane UX."
+  },
+  {
+    pubkey: "peer-rae",
+    handle: "@rae",
+    displayName: "Rae",
+    bio: "Interested in trust, moderation, and community rituals."
+  }
+];
+
+const defaultFollowPubkeys = [
+  defaultFriendIdentity.pubkey,
+  "peer-atlas"
 ];
 
 const seedPosts = [
@@ -96,6 +169,12 @@ const seedPosts = [
     authorPubkey: "peer-rae",
     body: "Next up is signed replication. No server should own the timeline.",
     createdAtMs: Date.UTC(2025, 1, 19, 10, 25)
+  },
+  {
+    id: "seed-5",
+    authorPubkey: defaultFriendIdentity.pubkey,
+    body: "I am your starter connection. Follow more peers when you want a wider circle.",
+    createdAtMs: Date.UTC(2025, 1, 19, 10, 43)
   }
 ];
 
@@ -105,21 +184,32 @@ const seedMessages = [
     senderPubkey: "peer-atlas",
     recipientPubkey: localIdentity.pubkey,
     body: "Testing direct messages over the local store.",
-    createdAtMs: Date.UTC(2025, 1, 19, 11, 5)
+    createdAtMs: Date.UTC(2025, 1, 19, 11, 5),
+    readAtMs: Date.UTC(2025, 1, 19, 11, 7)
   },
   {
     id: "msg-seed-2",
     senderPubkey: localIdentity.pubkey,
     recipientPubkey: "peer-atlas",
     body: "Looks good here. Next step is peer sync.",
-    createdAtMs: Date.UTC(2025, 1, 19, 11, 12)
+    createdAtMs: Date.UTC(2025, 1, 19, 11, 12),
+    readAtMs: Date.UTC(2025, 1, 19, 11, 12)
   },
   {
     id: "msg-seed-3",
     senderPubkey: "peer-noor",
     recipientPubkey: localIdentity.pubkey,
     body: "I like the hard stop after you catch up.",
-    createdAtMs: Date.UTC(2025, 1, 19, 12, 1)
+    createdAtMs: Date.UTC(2025, 1, 19, 12, 1),
+    readAtMs: null
+  },
+  {
+    id: "msg-seed-4",
+    senderPubkey: defaultFriendIdentity.pubkey,
+    recipientPubkey: localIdentity.pubkey,
+    body: "Welcome in. Tight circles make introductions matter again.",
+    createdAtMs: Date.UTC(2025, 1, 19, 12, 8),
+    readAtMs: null
   }
 ];
 
@@ -134,13 +224,26 @@ class SqliteMeshCore implements MeshCore {
       CREATE TABLE IF NOT EXISTS profiles (
         pubkey TEXT PRIMARY KEY NOT NULL,
         handle TEXT NOT NULL,
-        display_name TEXT NOT NULL
+        display_name TEXT NOT NULL,
+        bio TEXT NOT NULL DEFAULT ''
       );
       CREATE TABLE IF NOT EXISTS follows (
         follower_pubkey TEXT NOT NULL,
         followee_pubkey TEXT NOT NULL,
         created_at_ms INTEGER NOT NULL,
         PRIMARY KEY (follower_pubkey, followee_pubkey)
+      );
+      CREATE TABLE IF NOT EXISTS muted_peers (
+        owner_pubkey TEXT NOT NULL,
+        peer_pubkey TEXT NOT NULL,
+        created_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (owner_pubkey, peer_pubkey)
+      );
+      CREATE TABLE IF NOT EXISTS blocked_peers (
+        owner_pubkey TEXT NOT NULL,
+        peer_pubkey TEXT NOT NULL,
+        created_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (owner_pubkey, peer_pubkey)
       );
       CREATE TABLE IF NOT EXISTS posts (
         id TEXT PRIMARY KEY NOT NULL,
@@ -154,7 +257,8 @@ class SqliteMeshCore implements MeshCore {
         sender_pubkey TEXT NOT NULL,
         recipient_pubkey TEXT NOT NULL,
         body TEXT NOT NULL,
-        created_at_ms INTEGER NOT NULL
+        created_at_ms INTEGER NOT NULL,
+        read_at_ms INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_posts_created_at
         ON posts (created_at_ms DESC);
@@ -166,26 +270,26 @@ class SqliteMeshCore implements MeshCore {
         ON direct_messages (created_at_ms DESC);
     `);
 
+    await ensureColumn(db, "profiles", "bio", "TEXT NOT NULL DEFAULT ''");
+    await ensureColumn(db, "direct_messages", "read_at_ms", "INTEGER");
+
     for (const profile of seedProfiles) {
       await db.runAsync(
-        `INSERT OR IGNORE INTO profiles (pubkey, handle, display_name)
-         VALUES (?, ?, ?)`,
+        `INSERT OR IGNORE INTO profiles (pubkey, handle, display_name, bio)
+         VALUES (?, ?, ?, ?)`,
         profile.pubkey,
         profile.handle,
-        profile.displayName
+        profile.displayName,
+        profile.bio
       );
     }
 
-    for (const profile of seedProfiles) {
-      if (profile.pubkey === localIdentity.pubkey) {
-        continue;
-      }
-
+    for (const followeePubkey of defaultFollowPubkeys) {
       await db.runAsync(
         `INSERT OR IGNORE INTO follows (follower_pubkey, followee_pubkey, created_at_ms)
          VALUES (?, ?, ?)`,
         localIdentity.pubkey,
-        profile.pubkey,
+        followeePubkey,
         Date.now()
       );
     }
@@ -204,20 +308,107 @@ class SqliteMeshCore implements MeshCore {
     for (const message of seedMessages) {
       await db.runAsync(
         `INSERT OR IGNORE INTO direct_messages
-           (id, conversation_id, sender_pubkey, recipient_pubkey, body, created_at_ms)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+           (id, conversation_id, sender_pubkey, recipient_pubkey, body, created_at_ms, read_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         message.id,
         conversationIdFor(message.senderPubkey, message.recipientPubkey),
         message.senderPubkey,
         message.recipientPubkey,
         message.body,
-        message.createdAtMs
+        message.createdAtMs,
+        message.readAtMs
       );
     }
   }
 
   async getIdentity() {
-    return localIdentity;
+    const db = await this.getDb();
+    const row = await db.getFirstAsync<ProfileRecord>(
+      `SELECT pubkey, handle, display_name, bio
+       FROM profiles
+       WHERE pubkey = ?`,
+      localIdentity.pubkey
+    );
+
+    return mapIdentity(row);
+  }
+
+  async updateProfile(displayName: string, bio: string) {
+    const nextDisplayName = displayName.trim();
+    const nextBio = bio.trim();
+
+    if (!nextDisplayName) {
+      throw new Error("Display name cannot be empty.");
+    }
+
+    const db = await this.getDb();
+    await db.runAsync(
+      `UPDATE profiles
+       SET display_name = ?, bio = ?
+       WHERE pubkey = ?`,
+      nextDisplayName,
+      nextBio,
+      localIdentity.pubkey
+    );
+
+    return this.getIdentity();
+  }
+
+  async getAppStats() {
+    const db = await this.getDb();
+    const [
+      localPostsRow,
+      followingRow,
+      conversationsRow,
+      unreadRow,
+      mutedRow,
+      blockedRow
+    ] = await Promise.all([
+      db.getFirstAsync<{ count: number }>(
+        `SELECT COUNT(*) AS count
+         FROM posts
+         WHERE author_pubkey = ?`,
+        localIdentity.pubkey
+      ),
+      db.getFirstAsync<{ count: number }>(
+        `SELECT COUNT(*) AS count
+         FROM follows
+         WHERE follower_pubkey = ?`,
+        localIdentity.pubkey
+      ),
+      db.getFirstAsync<{ count: number }>(
+        `SELECT COUNT(DISTINCT conversation_id) AS count
+         FROM direct_messages`
+      ),
+      db.getFirstAsync<{ count: number }>(
+        `SELECT COUNT(*) AS count
+         FROM direct_messages
+         WHERE recipient_pubkey = ?
+           AND read_at_ms IS NULL`,
+        localIdentity.pubkey
+      ),
+      db.getFirstAsync<{ count: number }>(
+        `SELECT COUNT(*) AS count
+         FROM muted_peers
+         WHERE owner_pubkey = ?`,
+        localIdentity.pubkey
+      ),
+      db.getFirstAsync<{ count: number }>(
+        `SELECT COUNT(*) AS count
+         FROM blocked_peers
+         WHERE owner_pubkey = ?`,
+        localIdentity.pubkey
+      )
+    ]);
+
+    return {
+      localPostCount: localPostsRow?.count ?? 0,
+      followingCount: followingRow?.count ?? 0,
+      conversationCount: conversationsRow?.count ?? 0,
+      unreadCount: unreadRow?.count ?? 0,
+      mutedCount: mutedRow?.count ?? 0,
+      blockedCount: blockedRow?.count ?? 0
+    };
   }
 
   async getFeedPage(page: number, pageSize: number) {
@@ -235,13 +426,27 @@ class SqliteMeshCore implements MeshCore {
        FROM posts
        JOIN profiles ON profiles.pubkey = posts.author_pubkey
        WHERE posts.author_pubkey = ?
-         OR posts.author_pubkey IN (
-           SELECT followee_pubkey
-           FROM follows
-           WHERE follower_pubkey = ?
+         OR (
+           posts.author_pubkey IN (
+             SELECT followee_pubkey
+             FROM follows
+             WHERE follower_pubkey = ?
+           )
+           AND posts.author_pubkey NOT IN (
+             SELECT peer_pubkey
+             FROM muted_peers
+             WHERE owner_pubkey = ?
+           )
+           AND posts.author_pubkey NOT IN (
+             SELECT peer_pubkey
+             FROM blocked_peers
+             WHERE owner_pubkey = ?
+           )
          )
        ORDER BY posts.created_at_ms DESC, posts.id ASC
        LIMIT ? OFFSET ?`,
+      localIdentity.pubkey,
+      localIdentity.pubkey,
       localIdentity.pubkey,
       localIdentity.pubkey,
       pageSize,
@@ -282,6 +487,160 @@ class SqliteMeshCore implements MeshCore {
     return id;
   }
 
+  async listPeers() {
+    const db = await this.getDb();
+    const rows = await db.getAllAsync<PeerRecord>(
+      `SELECT
+         profiles.pubkey,
+         profiles.handle,
+         profiles.display_name,
+         profiles.bio,
+         CASE
+           WHEN follows.followee_pubkey IS NULL THEN 0
+           ELSE 1
+         END AS is_following,
+         CASE
+           WHEN muted_peers.peer_pubkey IS NULL THEN 0
+           ELSE 1
+         END AS is_muted,
+         CASE
+           WHEN blocked_peers.peer_pubkey IS NULL THEN 0
+           ELSE 1
+         END AS is_blocked,
+         COUNT(posts.id) AS post_count,
+         MAX(posts.created_at_ms) AS last_post_at_ms
+       FROM profiles
+       LEFT JOIN follows
+         ON follows.followee_pubkey = profiles.pubkey
+         AND follows.follower_pubkey = ?
+       LEFT JOIN muted_peers
+         ON muted_peers.peer_pubkey = profiles.pubkey
+         AND muted_peers.owner_pubkey = ?
+       LEFT JOIN blocked_peers
+         ON blocked_peers.peer_pubkey = profiles.pubkey
+         AND blocked_peers.owner_pubkey = ?
+       LEFT JOIN posts
+         ON posts.author_pubkey = profiles.pubkey
+       GROUP BY
+         profiles.pubkey,
+         profiles.handle,
+         profiles.display_name,
+         profiles.bio,
+         is_following,
+         is_muted,
+         is_blocked
+       ORDER BY
+         CASE WHEN profiles.pubkey = ? THEN 0 ELSE 1 END,
+         is_blocked ASC,
+         is_following DESC,
+         post_count DESC,
+         profiles.display_name COLLATE NOCASE ASC`,
+      localIdentity.pubkey,
+      localIdentity.pubkey,
+      localIdentity.pubkey,
+      localIdentity.pubkey
+    );
+
+    return rows.map((row) => ({
+      pubkey: row.pubkey,
+      handle: row.handle,
+      displayName: row.display_name,
+      bio: row.bio ?? "",
+      isSelf: row.pubkey === localIdentity.pubkey,
+      isFollowing: row.is_following === 1,
+      isMuted: row.is_muted === 1,
+      isBlocked: row.is_blocked === 1,
+      postCount: row.post_count,
+      lastPostAtMs: row.last_post_at_ms,
+      lastPostAt: row.last_post_at_ms ? formatTimestamp(row.last_post_at_ms) : null
+    }));
+  }
+
+  async followPeer(peerPubkey: string) {
+    if (peerPubkey === localIdentity.pubkey) {
+      return;
+    }
+
+    const db = await this.getDb();
+    await db.runAsync(
+      `INSERT OR IGNORE INTO follows (follower_pubkey, followee_pubkey, created_at_ms)
+       VALUES (?, ?, ?)`,
+      localIdentity.pubkey,
+      peerPubkey,
+      Date.now()
+    );
+  }
+
+  async unfollowPeer(peerPubkey: string) {
+    const db = await this.getDb();
+    await db.runAsync(
+      `DELETE FROM follows
+       WHERE follower_pubkey = ?
+         AND followee_pubkey = ?`,
+      localIdentity.pubkey,
+      peerPubkey
+    );
+  }
+
+  async mutePeer(peerPubkey: string) {
+    if (peerPubkey === localIdentity.pubkey) {
+      return;
+    }
+
+    const db = await this.getDb();
+    await db.runAsync(
+      `INSERT OR IGNORE INTO muted_peers (owner_pubkey, peer_pubkey, created_at_ms)
+       VALUES (?, ?, ?)`,
+      localIdentity.pubkey,
+      peerPubkey,
+      Date.now()
+    );
+  }
+
+  async unmutePeer(peerPubkey: string) {
+    const db = await this.getDb();
+    await db.runAsync(
+      `DELETE FROM muted_peers
+       WHERE owner_pubkey = ?
+         AND peer_pubkey = ?`,
+      localIdentity.pubkey,
+      peerPubkey
+    );
+  }
+
+  async blockPeer(peerPubkey: string) {
+    if (peerPubkey === localIdentity.pubkey) {
+      return;
+    }
+
+    const db = await this.getDb();
+    await db.runAsync(
+      `INSERT OR IGNORE INTO blocked_peers (owner_pubkey, peer_pubkey, created_at_ms)
+       VALUES (?, ?, ?)`,
+      localIdentity.pubkey,
+      peerPubkey,
+      Date.now()
+    );
+    await db.runAsync(
+      `DELETE FROM follows
+       WHERE follower_pubkey = ?
+         AND followee_pubkey = ?`,
+      localIdentity.pubkey,
+      peerPubkey
+    );
+  }
+
+  async unblockPeer(peerPubkey: string) {
+    const db = await this.getDb();
+    await db.runAsync(
+      `DELETE FROM blocked_peers
+       WHERE owner_pubkey = ?
+         AND peer_pubkey = ?`,
+      localIdentity.pubkey,
+      peerPubkey
+    );
+  }
+
   async listConversations() {
     const db = await this.getDb();
     const rows = await db.getAllAsync<ConversationRecord>(
@@ -289,11 +648,13 @@ class SqliteMeshCore implements MeshCore {
          peer.pubkey AS peer_pubkey,
          peer.display_name,
          peer.handle,
-         messages.body AS last_message_body,
-         messages.created_at_ms AS last_message_at_ms,
+         latest.body AS last_message_body,
+         latest.created_at_ms AS last_message_at_ms,
          SUM(
            CASE
-             WHEN messages.recipient_pubkey = ? AND messages.sender_pubkey = peer.pubkey
+             WHEN messages.recipient_pubkey = ?
+               AND messages.sender_pubkey = peer.pubkey
+               AND messages.read_at_ms IS NULL
                THEN 1
              ELSE 0
            END
@@ -303,33 +664,46 @@ class SqliteMeshCore implements MeshCore {
          WHEN messages.sender_pubkey = ? THEN messages.recipient_pubkey
          ELSE messages.sender_pubkey
        END
-       WHERE messages.id IN (
-         SELECT latest.id
-         FROM direct_messages AS latest
-         WHERE latest.conversation_id = messages.conversation_id
-         ORDER BY latest.created_at_ms DESC, latest.id DESC
-         LIMIT 1
-       )
-       GROUP BY peer.pubkey, peer.display_name, peer.handle, messages.body, messages.created_at_ms
+       LEFT JOIN blocked_peers
+         ON blocked_peers.peer_pubkey = peer.pubkey
+         AND blocked_peers.owner_pubkey = ?
+       JOIN direct_messages AS latest
+         ON latest.id = (
+           SELECT direct_messages.id
+           FROM direct_messages
+           WHERE direct_messages.conversation_id = messages.conversation_id
+           ORDER BY direct_messages.created_at_ms DESC, direct_messages.id DESC
+           LIMIT 1
+         )
+       WHERE blocked_peers.peer_pubkey IS NULL
+       GROUP BY
+         peer.pubkey,
+         peer.display_name,
+         peer.handle,
+         latest.body,
+         latest.created_at_ms
        ORDER BY last_message_at_ms DESC, peer.pubkey ASC`,
+      localIdentity.pubkey,
       localIdentity.pubkey,
       localIdentity.pubkey
     );
 
-    return Promise.all(
-      rows.map(async (row) => ({
-        peerPubkey: row.peer_pubkey,
-        peerHandle: row.handle,
-        peerDisplayName: row.display_name,
-        lastMessageBody: row.last_message_body,
-        lastMessageAtMs: row.last_message_at_ms,
-        lastMessageAt: formatTimestamp(row.last_message_at_ms),
-        unreadCount: await this.countUnread(row.peer_pubkey)
-      }))
-    );
+    return rows.map((row) => ({
+      peerPubkey: row.peer_pubkey,
+      peerHandle: row.handle,
+      peerDisplayName: row.display_name,
+      lastMessageBody: row.last_message_body,
+      lastMessageAtMs: row.last_message_at_ms,
+      lastMessageAt: formatTimestamp(row.last_message_at_ms),
+      unreadCount: row.unread_count
+    }));
   }
 
   async getMessages(peerPubkey: string) {
+    if (await this.isBlocked(peerPubkey)) {
+      return [];
+    }
+
     const db = await this.getDb();
     const rows = await db.getAllAsync<MessageRecord>(
       `SELECT
@@ -357,10 +731,32 @@ class SqliteMeshCore implements MeshCore {
     }));
   }
 
+  async markConversationRead(peerPubkey: string) {
+    const db = await this.getDb();
+    await db.runAsync(
+      `UPDATE direct_messages
+       SET read_at_ms = COALESCE(read_at_ms, ?)
+       WHERE conversation_id = ?
+         AND recipient_pubkey = ?
+         AND sender_pubkey = ?
+         AND read_at_ms IS NULL`,
+      Date.now(),
+      conversationIdFor(localIdentity.pubkey, peerPubkey),
+      localIdentity.pubkey,
+      peerPubkey
+    );
+  }
+
   async sendMessage(peerPubkey: string, body: string) {
     const trimmedBody = body.trim();
     if (!trimmedBody) {
       throw new Error("Message body cannot be empty.");
+    }
+    if (peerPubkey === localIdentity.pubkey) {
+      throw new Error("Cannot message yourself.");
+    }
+    if (await this.isBlocked(peerPubkey)) {
+      throw new Error("Unblock this peer before messaging them.");
     }
 
     const db = await this.getDb();
@@ -369,31 +765,33 @@ class SqliteMeshCore implements MeshCore {
 
     await db.runAsync(
       `INSERT INTO direct_messages
-         (id, conversation_id, sender_pubkey, recipient_pubkey, body, created_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+         (id, conversation_id, sender_pubkey, recipient_pubkey, body, created_at_ms, read_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       id,
       conversationIdFor(localIdentity.pubkey, peerPubkey),
       localIdentity.pubkey,
       peerPubkey,
       trimmedBody,
+      createdAtMs,
       createdAtMs
     );
 
     return id;
   }
 
-  private async countUnread(peerPubkey: string) {
+  private async isBlocked(peerPubkey: string) {
     const db = await this.getDb();
-    const row = await db.getFirstAsync<{ unread_count: number }>(
-      `SELECT COUNT(*) AS unread_count
-       FROM direct_messages
-       WHERE sender_pubkey = ?
-         AND recipient_pubkey = ?`,
-      peerPubkey,
-      localIdentity.pubkey
+    const row = await db.getFirstAsync<{ is_blocked: number }>(
+      `SELECT 1 AS is_blocked
+       FROM blocked_peers
+       WHERE owner_pubkey = ?
+         AND peer_pubkey = ?
+       LIMIT 1`,
+      localIdentity.pubkey,
+      peerPubkey
     );
 
-    return row?.unread_count ?? 0;
+    return row?.is_blocked === 1;
   }
 
   private async getDb() {
@@ -403,6 +801,33 @@ class SqliteMeshCore implements MeshCore {
 
     return this.dbPromise;
   }
+}
+
+async function ensureColumn(
+  db: SQLite.SQLiteDatabase,
+  tableName: string,
+  columnName: string,
+  definition: string
+) {
+  const rows = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${tableName})`);
+  const hasColumn = rows.some((row) => row.name === columnName);
+
+  if (!hasColumn) {
+    await db.execAsync(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+}
+
+function mapIdentity(row?: ProfileRecord | null): Identity {
+  if (!row) {
+    return localIdentity;
+  }
+
+  return {
+    pubkey: row.pubkey,
+    handle: row.handle,
+    displayName: row.display_name,
+    bio: row.bio ?? ""
+  };
 }
 
 function formatTimestamp(createdAtMs: number) {
@@ -422,10 +847,20 @@ function hasNativeMeshCore(
   return (
     typeof candidate?.bootstrap === "function" &&
     typeof candidate?.getIdentity === "function" &&
+    typeof candidate?.updateProfile === "function" &&
+    typeof candidate?.getAppStats === "function" &&
     typeof candidate?.getFeedPage === "function" &&
     typeof candidate?.publishPost === "function" &&
+    typeof candidate?.listPeers === "function" &&
+    typeof candidate?.followPeer === "function" &&
+    typeof candidate?.unfollowPeer === "function" &&
+    typeof candidate?.mutePeer === "function" &&
+    typeof candidate?.unmutePeer === "function" &&
+    typeof candidate?.blockPeer === "function" &&
+    typeof candidate?.unblockPeer === "function" &&
     typeof candidate?.listConversations === "function" &&
     typeof candidate?.getMessages === "function" &&
+    typeof candidate?.markConversationRead === "function" &&
     typeof candidate?.sendMessage === "function"
   );
 }
@@ -437,10 +872,20 @@ export function createMeshCore(): MeshCore {
     return {
       bootstrap: () => nativeModule.bootstrap(),
       getIdentity: () => nativeModule.getIdentity(),
+      updateProfile: (displayName, bio) => nativeModule.updateProfile(displayName, bio),
+      getAppStats: () => nativeModule.getAppStats(),
       getFeedPage: (page, pageSize) => nativeModule.getFeedPage(page, pageSize),
       publishPost: (body) => nativeModule.publishPost(body),
+      listPeers: () => nativeModule.listPeers(),
+      followPeer: (peerPubkey) => nativeModule.followPeer(peerPubkey),
+      unfollowPeer: (peerPubkey) => nativeModule.unfollowPeer(peerPubkey),
+      mutePeer: (peerPubkey) => nativeModule.mutePeer(peerPubkey),
+      unmutePeer: (peerPubkey) => nativeModule.unmutePeer(peerPubkey),
+      blockPeer: (peerPubkey) => nativeModule.blockPeer(peerPubkey),
+      unblockPeer: (peerPubkey) => nativeModule.unblockPeer(peerPubkey),
       listConversations: () => nativeModule.listConversations(),
       getMessages: (peerPubkey) => nativeModule.getMessages(peerPubkey),
+      markConversationRead: (peerPubkey) => nativeModule.markConversationRead(peerPubkey),
       sendMessage: (peerPubkey, body) => nativeModule.sendMessage(peerPubkey, body)
     };
   }
