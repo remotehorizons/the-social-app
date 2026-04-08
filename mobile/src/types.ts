@@ -13,6 +13,7 @@ export type Identity = {
   pubkey: string;
   handle: string;
   displayName: string;
+  bio: string;
 };
 
 export type ConversationPreview = {
@@ -34,4 +35,23 @@ export type DirectMessage = {
   createdAtMs: number;
   createdAt: string;
   isLocalAuthor: boolean;
+};
+
+export type NetworkPeer = {
+  pubkey: string;
+  handle: string;
+  displayName: string;
+  bio: string;
+  isSelf: boolean;
+  isFollowing: boolean;
+  postCount: number;
+  lastPostAtMs: number | null;
+  lastPostAt: string | null;
+};
+
+export type AppStats = {
+  localPostCount: number;
+  followingCount: number;
+  conversationCount: number;
+  unreadCount: number;
 };

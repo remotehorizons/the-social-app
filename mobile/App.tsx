@@ -4,6 +4,7 @@ import {
   FlatList,
   Pressable,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -14,9 +15,11 @@ import { PostCard } from "./src/components/PostCard";
 import { createMeshCore, MeshCore } from "./src/core/meshCore";
 import { theme, themes, ColorMode } from "./src/theme";
 import {
+  AppStats,
   ConversationPreview,
   DirectMessage,
   Identity,
+  NetworkPeer,
   Post
 } from "./src/types";
 
@@ -24,7 +27,14 @@ type AppScreenProps = {
   core: MeshCore;
 };
 
-type AppTab = "feed" | "messages";
+type AppTab = "feed" | "network" | "messages";
+
+const emptyStats: AppStats = {
+  localPostCount: 0,
+  followingCount: 0,
+  conversationCount: 0,
+  unreadCount: 0
+};
 
 export default function App() {
   const [core] = useState(() => createMeshCore());
@@ -36,8 +46,11 @@ export function AppScreen({ core }: AppScreenProps) {
   const [activeTab, setActiveTab] = useState<AppTab>("feed");
   const [composerText, setComposerText] = useState("");
   const [messageText, setMessageText] = useState("");
+  const [profileDraft, setProfileDraft] = useState({ displayName: "", bio: "" });
   const [identity, setIdentity] = useState<Identity | null>(null);
+  const [stats, setStats] = useState<AppStats>(emptyStats);
   const [posts, setPosts] = useState<Post[]>([]);
+  const [peers, setPeers] = useState<NetworkPeer[]>([]);
   const [conversations, setConversations] = useState<ConversationPreview[]>([]);
   const [selectedPeerPubkey, setSelectedPeerPubkey] = useState<string | null>(null);
   const [messages, setMessages] = useState<DirectMessage[]>([]);
@@ -46,6 +59,8 @@ export function AppScreen({ core }: AppScreenProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isPosting, setIsPosting] = useState(false);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [busyPeerPubkey, setBusyPeerPubkey] = useState<string | null>(null);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -61,9 +76,12 @@ export function AppScreen({ core }: AppScreenProps) {
     messageText.trim().length > 0 &&
     messageText.length <= theme.postCharLimit &&
     selectedPeerPubkey !== null;
+  const canSaveProfile = profileDraft.displayName.trim().length > 0;
   const selectedConversation =
     conversations.find((conversation) => conversation.peerPubkey === selectedPeerPubkey) ??
     null;
+  const onboardingReady =
+    stats.followingCount >= 2 && stats.localPostCount >= 1 && stats.conversationCount >= 1;
 
   useEffect(() => {
     let isMounted = true;
@@ -73,43 +91,16 @@ export function AppScreen({ core }: AppScreenProps) {
         setErrorMessage(null);
         await core.bootstrap();
 
-        const [nextIdentity, firstPage, nextConversations] = await Promise.all([
-          core.getIdentity(),
-          core.getFeedPage(0, theme.pageSize),
-          core.listConversations()
-        ]);
-
+        const snapshot = await loadSnapshot(core);
         if (!isMounted) {
           return;
         }
 
-        setIdentity(nextIdentity);
-        setPosts(firstPage);
-        setPage(0);
-        setHasMore(firstPage.length === theme.pageSize);
-        setConversations(nextConversations);
-
-        const firstConversation = nextConversations[0] ?? null;
-        setSelectedPeerPubkey(firstConversation?.peerPubkey ?? null);
-
-        if (firstConversation) {
-          setIsLoadingMessages(true);
-          const firstMessages = await core.getMessages(firstConversation.peerPubkey);
-
-          if (!isMounted) {
-            return;
-          }
-
-          setMessages(firstMessages);
-          setIsLoadingMessages(false);
-        }
+        applySnapshot(snapshot);
       } catch (error) {
-        if (!isMounted) {
-          return;
+        if (isMounted) {
+          setErrorMessage(getErrorMessage(error));
         }
-
-        setErrorMessage(getErrorMessage(error));
-        setIsLoadingMessages(false);
       } finally {
         if (isMounted) {
           setIsLoading(false);
@@ -124,14 +115,49 @@ export function AppScreen({ core }: AppScreenProps) {
     };
   }, [core]);
 
+  const applySnapshot = (snapshot: Snapshot) => {
+    setIdentity(snapshot.identity);
+    setProfileDraft({
+      displayName: snapshot.identity.displayName,
+      bio: snapshot.identity.bio
+    });
+    setStats(snapshot.stats);
+    setPosts(snapshot.feed);
+    setPage(0);
+    setHasMore(snapshot.feed.length === theme.pageSize);
+    setPeers(snapshot.peers);
+    setConversations(snapshot.conversations);
+
+    const nextSelectedPeerPubkey = chooseSelectedPeer(
+      snapshot.conversations,
+      selectedPeerPubkey
+    );
+    setSelectedPeerPubkey(nextSelectedPeerPubkey);
+    setMessages(
+      nextSelectedPeerPubkey ? snapshot.messagesByPeer[nextSelectedPeerPubkey] ?? [] : []
+    );
+  };
+
+  const refreshAppData = async (nextSelectedPeer = selectedPeerPubkey) => {
+    const snapshot = await loadSnapshot(core, nextSelectedPeer);
+    applySnapshot(snapshot);
+  };
+
   const loadConversation = async (peerPubkey: string) => {
     try {
       setIsLoadingMessages(true);
       setErrorMessage(null);
-      setSelectedPeerPubkey(peerPubkey);
+      await core.markConversationRead(peerPubkey);
+      const [nextMessages, nextConversations, nextStats] = await Promise.all([
+        core.getMessages(peerPubkey),
+        core.listConversations(),
+        core.getAppStats()
+      ]);
 
-      const nextMessages = await core.getMessages(peerPubkey);
+      setSelectedPeerPubkey(peerPubkey);
       setMessages(nextMessages);
+      setConversations(nextConversations);
+      setStats(nextStats);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
@@ -148,16 +174,58 @@ export function AppScreen({ core }: AppScreenProps) {
       setIsPosting(true);
       setErrorMessage(null);
       await core.publishPost(composerText.trim());
-      const firstPage = await core.getFeedPage(0, theme.pageSize);
-
       setComposerText("");
-      setPosts(firstPage);
-      setPage(0);
-      setHasMore(firstPage.length === theme.pageSize);
+      await refreshAppData();
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
       setIsPosting(false);
+    }
+  };
+
+  const saveProfile = async () => {
+    if (!canSaveProfile || isSavingProfile) {
+      return;
+    }
+
+    try {
+      setIsSavingProfile(true);
+      setErrorMessage(null);
+      const nextIdentity = await core.updateProfile(
+        profileDraft.displayName,
+        profileDraft.bio
+      );
+      setIdentity(nextIdentity);
+      setProfileDraft({
+        displayName: nextIdentity.displayName,
+        bio: nextIdentity.bio
+      });
+      await refreshAppData();
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  const toggleFollow = async (peer: NetworkPeer) => {
+    if (peer.isSelf || busyPeerPubkey) {
+      return;
+    }
+
+    try {
+      setBusyPeerPubkey(peer.pubkey);
+      setErrorMessage(null);
+      if (peer.isFollowing) {
+        await core.unfollowPeer(peer.pubkey);
+      } else {
+        await core.followPeer(peer.pubkey);
+      }
+      await refreshAppData();
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setBusyPeerPubkey(null);
     }
   };
 
@@ -170,15 +238,8 @@ export function AppScreen({ core }: AppScreenProps) {
       setIsSendingMessage(true);
       setErrorMessage(null);
       await core.sendMessage(selectedPeerPubkey, messageText.trim());
-
-      const [nextConversations, nextMessages] = await Promise.all([
-        core.listConversations(),
-        core.getMessages(selectedPeerPubkey)
-      ]);
-
       setMessageText("");
-      setConversations(nextConversations);
-      setMessages(nextMessages);
+      await refreshAppData(selectedPeerPubkey);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
@@ -212,6 +273,8 @@ export function AppScreen({ core }: AppScreenProps) {
     setColorMode((currentMode) => (currentMode === "light" ? "dark" : "light"));
   };
 
+  const networkSuggestions = peers.filter((peer) => !peer.isSelf && !peer.isFollowing);
+
   return (
     <SafeAreaView style={styles.safe} testID="app-shell">
       <StatusBar style={colorMode === "light" ? "dark" : "light"} />
@@ -237,41 +300,34 @@ export function AppScreen({ core }: AppScreenProps) {
             </Pressable>
           </View>
 
+          <View style={styles.statsRow}>
+            <MetricCard label="Posts" value={stats.localPostCount} palette={palette} />
+            <MetricCard label="Following" value={stats.followingCount} palette={palette} />
+            <MetricCard label="Threads" value={stats.conversationCount} palette={palette} />
+            <MetricCard label="Unread" value={stats.unreadCount} palette={palette} />
+          </View>
+
           <View style={styles.tabBar}>
-            <Pressable
-              onPress={() => setActiveTab("feed")}
-              style={[
-                styles.tabButton,
-                activeTab === "feed" && styles.tabButtonActive
-              ]}
-              testID="feed-tab"
-            >
-              <Text
+            {(["feed", "network", "messages"] as const).map((tab) => (
+              <Pressable
+                key={tab}
+                onPress={() => setActiveTab(tab)}
                 style={[
-                  styles.tabButtonText,
-                  activeTab === "feed" && styles.tabButtonTextActive
+                  styles.tabButton,
+                  activeTab === tab && styles.tabButtonActive
                 ]}
+                testID={`${tab}-tab`}
               >
-                FEED
-              </Text>
-            </Pressable>
-            <Pressable
-              onPress={() => setActiveTab("messages")}
-              style={[
-                styles.tabButton,
-                activeTab === "messages" && styles.tabButtonActive
-              ]}
-              testID="messages-tab"
-            >
-              <Text
-                style={[
-                  styles.tabButtonText,
-                  activeTab === "messages" && styles.tabButtonTextActive
-                ]}
-              >
-                MESSAGES
-              </Text>
-            </Pressable>
+                <Text
+                  style={[
+                    styles.tabButtonText,
+                    activeTab === tab && styles.tabButtonTextActive
+                  ]}
+                >
+                  {tab === "feed" ? "FEED" : tab === "network" ? "NETWORK" : "MESSAGES"}
+                </Text>
+              </Pressable>
+            ))}
           </View>
         </View>
 
@@ -283,9 +339,20 @@ export function AppScreen({ core }: AppScreenProps) {
 
         {activeTab === "feed" ? (
           <>
+            {!onboardingReady ? (
+              <View style={styles.callout}>
+                <Text style={styles.calloutTitle}>FIRST SESSION CHECKLIST</Text>
+                <Text style={styles.calloutBody}>
+                  Follow at least two people, publish one short update, and send one direct
+                  message. That is the minimum loop that makes a social product sticky.
+                </Text>
+              </View>
+            ) : null}
+
             <View style={styles.composer}>
+              <Text style={styles.sectionTitle}>POST TO YOUR CIRCLE</Text>
               <TextInput
-                placeholder="Share a short update..."
+                placeholder="Share one useful thought..."
                 placeholderTextColor={palette.textMuted}
                 multiline
                 style={styles.input}
@@ -321,7 +388,9 @@ export function AppScreen({ core }: AppScreenProps) {
                 isLoading ? (
                   <Text style={styles.emptyState}>LOADING LOCAL TIMELINE</Text>
                 ) : (
-                  <Text style={styles.emptyState}>NO POSTS IN YOUR NETWORK YET</Text>
+                  <Text style={styles.emptyState}>
+                    YOUR FEED IS EMPTY. FOLLOW PEOPLE IN NETWORK TO START THE LOOP.
+                  </Text>
                 )
               }
               ListFooterComponent={
@@ -343,7 +412,91 @@ export function AppScreen({ core }: AppScreenProps) {
               }
             />
           </>
-        ) : (
+        ) : null}
+
+        {activeTab === "network" ? (
+          <ScrollView contentContainerStyle={styles.networkPage}>
+            <View style={styles.panel}>
+              <Text style={styles.sectionTitle}>PROFILE</Text>
+              <TextInput
+                value={profileDraft.displayName}
+                onChangeText={(displayName) =>
+                  setProfileDraft((current) => ({ ...current, displayName }))
+                }
+                placeholder="Display name"
+                placeholderTextColor={palette.textMuted}
+                style={styles.singleLineInput}
+                testID="display-name-input"
+              />
+              <TextInput
+                value={profileDraft.bio}
+                onChangeText={(bio) => setProfileDraft((current) => ({ ...current, bio }))}
+                placeholder="Tell people what you care about"
+                placeholderTextColor={palette.textMuted}
+                multiline
+                style={styles.input}
+                testID="bio-input"
+              />
+              <View style={styles.composerFooter}>
+                <Text style={styles.helperText}>
+                  People decide whether to follow you from this card.
+                </Text>
+                <Pressable
+                  onPress={() => void saveProfile()}
+                  disabled={!canSaveProfile || isSavingProfile}
+                  style={({ pressed }) => [
+                    styles.postButton,
+                    (!canSaveProfile || isSavingProfile || pressed) &&
+                      styles.postButtonDisabled
+                  ]}
+                  testID="save-profile-button"
+                >
+                  <Text style={styles.postButtonText}>
+                    {isSavingProfile ? "SAVING" : "SAVE"}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+
+            <View style={styles.panel}>
+              <Text style={styles.sectionTitle}>GROWTH PLAN</Text>
+              <Text style={styles.calloutBody}>
+                Successful calm social products win on trust, not infinite reach. The loop
+                here is simple: identity, relevant follows, useful posts, and fast replies.
+              </Text>
+            </View>
+
+            {networkSuggestions.length > 0 ? (
+              <View style={styles.panel}>
+                <Text style={styles.sectionTitle}>SUGGESTED CONNECTIONS</Text>
+                {networkSuggestions.map((peer) => (
+                  <PeerRow
+                    key={peer.pubkey}
+                    peer={peer}
+                    palette={palette}
+                    busy={busyPeerPubkey === peer.pubkey}
+                    onPress={() => void toggleFollow(peer)}
+                  />
+                ))}
+              </View>
+            ) : null}
+
+            <View style={styles.panel}>
+              <Text style={styles.sectionTitle}>YOUR NETWORK</Text>
+              {peers.map((peer) => (
+                <PeerRow
+                  key={peer.pubkey}
+                  peer={peer}
+                  palette={palette}
+                  busy={busyPeerPubkey === peer.pubkey}
+                  onPress={() => void toggleFollow(peer)}
+                />
+              ))}
+            </View>
+          </ScrollView>
+        ) : null}
+
+        {activeTab === "messages" ? (
           <View style={styles.messagesLayout}>
             <View style={styles.conversationRail}>
               {conversations.length > 0 ? (
@@ -410,6 +563,7 @@ export function AppScreen({ core }: AppScreenProps) {
                 />
 
                 <View style={styles.composer}>
+                  <Text style={styles.sectionTitle}>REPLY FAST</Text>
                   <TextInput
                     placeholder={`Message ${selectedConversation.peerHandle}...`}
                     placeholderTextColor={palette.textMuted}
@@ -447,9 +601,123 @@ export function AppScreen({ core }: AppScreenProps) {
               </View>
             )}
           </View>
-        )}
+        ) : null}
       </View>
     </SafeAreaView>
+  );
+}
+
+type Snapshot = {
+  identity: Identity;
+  stats: AppStats;
+  feed: Post[];
+  peers: NetworkPeer[];
+  conversations: ConversationPreview[];
+  messagesByPeer: Record<string, DirectMessage[]>;
+};
+
+async function loadSnapshot(
+  core: MeshCore,
+  selectedPeerPubkey?: string | null
+): Promise<Snapshot> {
+  const [identity, stats, feed, peers, conversations] = await Promise.all([
+    core.getIdentity(),
+    core.getAppStats(),
+    core.getFeedPage(0, theme.pageSize),
+    core.listPeers(),
+    core.listConversations()
+  ]);
+
+  const nextSelectedPeerPubkey = chooseSelectedPeer(conversations, selectedPeerPubkey ?? null);
+  const messages = nextSelectedPeerPubkey
+    ? await core.getMessages(nextSelectedPeerPubkey)
+    : [];
+
+  return {
+    identity,
+    stats,
+    feed,
+    peers,
+    conversations,
+    messagesByPeer: nextSelectedPeerPubkey
+      ? { [nextSelectedPeerPubkey]: messages }
+      : {}
+  };
+}
+
+function chooseSelectedPeer(
+  conversations: ConversationPreview[],
+  selectedPeerPubkey: string | null
+) {
+  if (
+    selectedPeerPubkey &&
+    conversations.some((conversation) => conversation.peerPubkey === selectedPeerPubkey)
+  ) {
+    return selectedPeerPubkey;
+  }
+
+  return conversations[0]?.peerPubkey ?? null;
+}
+
+function MetricCard({
+  label,
+  value,
+  palette
+}: {
+  label: string;
+  value: number;
+  palette: (typeof themes)[ColorMode];
+}) {
+  const styles = createStyles(palette);
+
+  return (
+    <View style={styles.metricCard}>
+      <Text style={styles.metricValue}>{value}</Text>
+      <Text style={styles.metricLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function PeerRow({
+  peer,
+  palette,
+  busy,
+  onPress
+}: {
+  peer: NetworkPeer;
+  palette: (typeof themes)[ColorMode];
+  busy: boolean;
+  onPress: () => void;
+}) {
+  const styles = createStyles(palette);
+
+  return (
+    <View style={styles.peerRow}>
+      <View style={styles.peerCopy}>
+        <View style={styles.peerTitleRow}>
+          <Text style={styles.peerName}>{peer.displayName}</Text>
+          <Text style={styles.peerHandle}>{peer.handle}</Text>
+        </View>
+        <Text style={styles.peerBio}>{peer.bio || "No profile bio yet."}</Text>
+        <Text style={styles.peerMeta}>
+          {peer.postCount} posts
+          {peer.lastPostAt ? ` • last post ${peer.lastPostAt}` : ""}
+        </Text>
+      </View>
+      <Pressable
+        disabled={peer.isSelf || busy}
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.followButton,
+          (peer.isSelf || busy || pressed) && styles.followButtonDisabled
+        ]}
+        testID={`follow-toggle-${peer.pubkey}`}
+      >
+        <Text style={styles.followButtonText}>
+          {peer.isSelf ? "YOU" : busy ? "..." : peer.isFollowing ? "UNFOLLOW" : "FOLLOW"}
+        </Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -511,6 +779,31 @@ function createStyles(palette: (typeof themes)[ColorMode]) {
       fontSize: 12,
       letterSpacing: 0.8
     },
+    statsRow: {
+      flexDirection: "row",
+      gap: theme.spacing.sm
+    },
+    metricCard: {
+      flex: 1,
+      borderWidth: 1,
+      borderColor: palette.border,
+      borderRadius: theme.radius.sm,
+      paddingVertical: theme.spacing.sm,
+      paddingHorizontal: theme.spacing.xs,
+      backgroundColor: palette.bg,
+      alignItems: "center"
+    },
+    metricValue: {
+      fontFamily: "Courier",
+      fontSize: 18,
+      fontWeight: "700",
+      color: palette.textPrimary
+    },
+    metricLabel: {
+      fontFamily: "Courier",
+      fontSize: 11,
+      color: palette.textMuted
+    },
     tabBar: {
       flexDirection: "row",
       gap: theme.spacing.sm
@@ -519,69 +812,23 @@ function createStyles(palette: (typeof themes)[ColorMode]) {
       flex: 1,
       borderWidth: 1,
       borderColor: palette.border,
+      backgroundColor: palette.bg,
       borderRadius: theme.radius.sm,
       paddingVertical: theme.spacing.sm,
-      alignItems: "center",
-      backgroundColor: palette.bg
+      alignItems: "center"
     },
     tabButtonActive: {
       backgroundColor: palette.accent
     },
     tabButtonText: {
       fontFamily: "Courier",
-      fontWeight: "700",
       fontSize: 12,
-      letterSpacing: 1,
-      color: palette.textPrimary
+      fontWeight: "700",
+      color: palette.textPrimary,
+      letterSpacing: 0.8
     },
     tabButtonTextActive: {
       color: palette.accentText
-    },
-    composer: {
-      borderWidth: 1,
-      borderColor: palette.border,
-      borderRadius: theme.radius.sm,
-      padding: theme.spacing.sm,
-      backgroundColor: palette.panel,
-      gap: theme.spacing.sm
-    },
-    input: {
-      minHeight: 84,
-      textAlignVertical: "top",
-      fontFamily: "Courier",
-      fontSize: 15,
-      color: palette.textPrimary
-    },
-    composerFooter: {
-      flexDirection: "row",
-      alignItems: "center"
-    },
-    counter: {
-      fontFamily: "Courier",
-      color: palette.textMuted,
-      fontSize: 12
-    },
-    postButton: {
-      marginLeft: "auto",
-      backgroundColor: palette.accent,
-      borderRadius: theme.radius.sm,
-      borderWidth: 1,
-      borderColor: palette.border,
-      paddingHorizontal: theme.spacing.md,
-      paddingVertical: theme.spacing.xs
-    },
-    postButtonDisabled: {
-      opacity: 0.45
-    },
-    postButtonText: {
-      fontFamily: "Courier",
-      color: palette.accentText,
-      fontWeight: "700",
-      letterSpacing: 1
-    },
-    feed: {
-      gap: theme.spacing.sm,
-      paddingBottom: theme.spacing.lg
     },
     errorPanel: {
       borderWidth: 1,
@@ -595,36 +842,200 @@ function createStyles(palette: (typeof themes)[ColorMode]) {
       color: palette.textPrimary,
       fontSize: 12
     },
+    callout: {
+      borderWidth: 1,
+      borderColor: palette.border,
+      borderRadius: theme.radius.sm,
+      backgroundColor: palette.panel,
+      padding: theme.spacing.md,
+      gap: theme.spacing.xs
+    },
+    calloutTitle: {
+      fontFamily: "Courier",
+      color: palette.textPrimary,
+      fontSize: 12,
+      fontWeight: "700",
+      letterSpacing: 0.8
+    },
+    calloutBody: {
+      fontFamily: "Courier",
+      color: palette.textMuted,
+      fontSize: 12,
+      lineHeight: 18
+    },
+    composer: {
+      borderWidth: 1,
+      borderColor: palette.border,
+      borderRadius: theme.radius.sm,
+      padding: theme.spacing.md,
+      backgroundColor: palette.panel,
+      gap: theme.spacing.sm
+    },
+    panel: {
+      borderWidth: 1,
+      borderColor: palette.border,
+      borderRadius: theme.radius.sm,
+      padding: theme.spacing.md,
+      backgroundColor: palette.panel,
+      gap: theme.spacing.sm
+    },
+    sectionTitle: {
+      fontFamily: "Courier",
+      color: palette.textPrimary,
+      fontWeight: "700",
+      fontSize: 12,
+      letterSpacing: 0.8
+    },
+    input: {
+      minHeight: 92,
+      borderWidth: 1,
+      borderColor: palette.border,
+      borderRadius: theme.radius.sm,
+      padding: theme.spacing.md,
+      backgroundColor: palette.bg,
+      fontFamily: "Courier",
+      color: palette.textPrimary,
+      textAlignVertical: "top"
+    },
+    singleLineInput: {
+      borderWidth: 1,
+      borderColor: palette.border,
+      borderRadius: theme.radius.sm,
+      padding: theme.spacing.md,
+      backgroundColor: palette.bg,
+      fontFamily: "Courier",
+      color: palette.textPrimary
+    },
+    composerFooter: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: theme.spacing.sm
+    },
+    counter: {
+      fontFamily: "Courier",
+      color: palette.textMuted,
+      fontSize: 12
+    },
+    helperText: {
+      flex: 1,
+      fontFamily: "Courier",
+      color: palette.textMuted,
+      fontSize: 12,
+      lineHeight: 18
+    },
+    postButton: {
+      borderWidth: 1,
+      borderColor: palette.border,
+      borderRadius: theme.radius.sm,
+      backgroundColor: palette.accent,
+      paddingHorizontal: theme.spacing.md,
+      paddingVertical: theme.spacing.sm
+    },
+    postButtonDisabled: {
+      opacity: 0.55
+    },
+    postButtonText: {
+      fontFamily: "Courier",
+      fontWeight: "700",
+      color: palette.accentText,
+      fontSize: 12,
+      letterSpacing: 0.8
+    },
+    feed: {
+      gap: theme.spacing.sm,
+      paddingBottom: theme.spacing.lg
+    },
     emptyState: {
-      paddingVertical: theme.spacing.lg,
       textAlign: "center",
       fontFamily: "Courier",
       color: palette.textMuted,
-      letterSpacing: 1
+      fontSize: 12,
+      lineHeight: 18,
+      paddingVertical: theme.spacing.lg
     },
     footer: {
-      alignItems: "center",
-      paddingVertical: theme.spacing.md
+      paddingVertical: theme.spacing.sm,
+      alignItems: "center"
     },
     loadMoreButton: {
       borderWidth: 1,
       borderColor: palette.border,
-      backgroundColor: palette.panel,
-      paddingHorizontal: theme.spacing.lg,
+      borderRadius: theme.radius.sm,
+      paddingHorizontal: theme.spacing.md,
       paddingVertical: theme.spacing.sm,
-      borderRadius: theme.radius.sm
+      backgroundColor: palette.panel
     },
     loadMoreText: {
       fontFamily: "Courier",
       color: palette.textPrimary,
       fontWeight: "700",
-      letterSpacing: 0.8
+      fontSize: 12
     },
     caughtUp: {
       fontFamily: "Courier",
       color: palette.textMuted,
+      fontSize: 12
+    },
+    networkPage: {
+      gap: theme.spacing.sm,
+      paddingBottom: theme.spacing.lg
+    },
+    peerRow: {
+      flexDirection: "row",
+      gap: theme.spacing.sm,
+      alignItems: "center",
+      borderTopWidth: 1,
+      borderTopColor: palette.border,
+      paddingTop: theme.spacing.sm
+    },
+    peerCopy: {
+      flex: 1,
+      gap: theme.spacing.xs
+    },
+    peerTitleRow: {
+      flexDirection: "row",
+      gap: theme.spacing.sm,
+      flexWrap: "wrap"
+    },
+    peerName: {
+      fontFamily: "Courier",
+      color: palette.textPrimary,
+      fontSize: 14,
+      fontWeight: "700"
+    },
+    peerHandle: {
+      fontFamily: "Courier",
+      color: palette.textMuted,
+      fontSize: 12
+    },
+    peerBio: {
+      fontFamily: "Courier",
+      color: palette.textPrimary,
       fontSize: 12,
-      letterSpacing: 1
+      lineHeight: 18
+    },
+    peerMeta: {
+      fontFamily: "Courier",
+      color: palette.textMuted,
+      fontSize: 11
+    },
+    followButton: {
+      borderWidth: 1,
+      borderColor: palette.border,
+      backgroundColor: palette.accent,
+      borderRadius: theme.radius.sm,
+      paddingHorizontal: theme.spacing.sm,
+      paddingVertical: theme.spacing.sm
+    },
+    followButtonDisabled: {
+      opacity: 0.6
+    },
+    followButtonText: {
+      fontFamily: "Courier",
+      color: palette.accentText,
+      fontWeight: "700",
+      fontSize: 11
     },
     messagesLayout: {
       flex: 1,
@@ -643,11 +1054,11 @@ function createStyles(palette: (typeof themes)[ColorMode]) {
       borderColor: palette.border,
       borderRadius: theme.radius.sm,
       padding: theme.spacing.sm,
-      gap: theme.spacing.xs,
-      backgroundColor: palette.bg
+      backgroundColor: palette.bg,
+      gap: theme.spacing.xs
     },
     conversationButtonActive: {
-      backgroundColor: palette.errorPanel
+      backgroundColor: palette.panel
     },
     conversationTopRow: {
       flexDirection: "row",
@@ -655,27 +1066,26 @@ function createStyles(palette: (typeof themes)[ColorMode]) {
       gap: theme.spacing.sm
     },
     conversationName: {
-      flex: 1,
       fontFamily: "Courier",
-      fontSize: 13,
+      color: palette.textPrimary,
       fontWeight: "700",
-      color: palette.textPrimary
+      fontSize: 13
     },
     conversationTime: {
       fontFamily: "Courier",
-      fontSize: 11,
-      color: palette.textMuted
+      color: palette.textMuted,
+      fontSize: 11
     },
     conversationMeta: {
       fontFamily: "Courier",
-      fontSize: 11,
-      color: palette.textMuted
+      color: palette.textMuted,
+      fontSize: 11
     },
     conversationPreview: {
       fontFamily: "Courier",
+      color: palette.textPrimary,
       fontSize: 12,
-      lineHeight: 18,
-      color: palette.textPrimary
+      lineHeight: 18
     },
     unreadBadge: {
       alignSelf: "flex-start",
@@ -684,9 +1094,8 @@ function createStyles(palette: (typeof themes)[ColorMode]) {
       paddingHorizontal: theme.spacing.xs,
       paddingVertical: 2,
       fontFamily: "Courier",
-      fontSize: 10,
-      fontWeight: "700",
-      color: palette.textPrimary
+      color: palette.textPrimary,
+      fontSize: 11
     },
     threadPanel: {
       flex: 1,
@@ -694,37 +1103,30 @@ function createStyles(palette: (typeof themes)[ColorMode]) {
       borderColor: palette.border,
       borderRadius: theme.radius.sm,
       backgroundColor: palette.panel,
-      padding: theme.spacing.sm,
+      padding: theme.spacing.md,
       gap: theme.spacing.sm
     },
     threadHeader: {
-      borderBottomWidth: 1,
-      borderBottomColor: palette.border,
-      paddingBottom: theme.spacing.sm
+      gap: 2
     },
     threadTitle: {
       fontFamily: "Courier",
-      fontSize: 16,
+      color: palette.textPrimary,
       fontWeight: "700",
-      color: palette.textPrimary
+      fontSize: 14
     },
     threadSubtitle: {
-      marginTop: 2,
       fontFamily: "Courier",
-      fontSize: 12,
-      color: palette.textMuted
+      color: palette.textMuted,
+      fontSize: 12
     },
     messagesList: {
       gap: theme.spacing.sm,
-      paddingVertical: theme.spacing.xs
+      paddingBottom: theme.spacing.sm
     }
   });
 }
 
 function getErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return "The local backend request failed.";
+  return error instanceof Error ? error.message : "Something went wrong.";
 }
