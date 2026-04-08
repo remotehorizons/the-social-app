@@ -19,6 +19,10 @@ type MeshCore = {
   listPeers(): Promise<NetworkPeer[]>;
   followPeer(peerPubkey: string): Promise<void>;
   unfollowPeer(peerPubkey: string): Promise<void>;
+  mutePeer(peerPubkey: string): Promise<void>;
+  unmutePeer(peerPubkey: string): Promise<void>;
+  blockPeer(peerPubkey: string): Promise<void>;
+  unblockPeer(peerPubkey: string): Promise<void>;
   listConversations(): Promise<ConversationPreview[]>;
   getMessages(peerPubkey: string): Promise<DirectMessage[]>;
   markConversationRead(peerPubkey: string): Promise<void>;
@@ -35,6 +39,10 @@ type NativeMeshSocialCoreModule = {
   listPeers?(): Promise<NetworkPeer[]>;
   followPeer?(peerPubkey: string): Promise<void>;
   unfollowPeer?(peerPubkey: string): Promise<void>;
+  mutePeer?(peerPubkey: string): Promise<void>;
+  unmutePeer?(peerPubkey: string): Promise<void>;
+  blockPeer?(peerPubkey: string): Promise<void>;
+  unblockPeer?(peerPubkey: string): Promise<void>;
   listConversations?(): Promise<ConversationPreview[]>;
   getMessages?(peerPubkey: string): Promise<DirectMessage[]>;
   markConversationRead?(peerPubkey: string): Promise<void>;
@@ -81,6 +89,8 @@ type PeerRecord = {
   display_name: string;
   bio: string | null;
   is_following: number;
+  is_muted: number;
+  is_blocked: number;
   post_count: number;
   last_post_at_ms: number | null;
 };
@@ -223,6 +233,18 @@ class SqliteMeshCore implements MeshCore {
         created_at_ms INTEGER NOT NULL,
         PRIMARY KEY (follower_pubkey, followee_pubkey)
       );
+      CREATE TABLE IF NOT EXISTS muted_peers (
+        owner_pubkey TEXT NOT NULL,
+        peer_pubkey TEXT NOT NULL,
+        created_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (owner_pubkey, peer_pubkey)
+      );
+      CREATE TABLE IF NOT EXISTS blocked_peers (
+        owner_pubkey TEXT NOT NULL,
+        peer_pubkey TEXT NOT NULL,
+        created_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (owner_pubkey, peer_pubkey)
+      );
       CREATE TABLE IF NOT EXISTS posts (
         id TEXT PRIMARY KEY NOT NULL,
         author_pubkey TEXT NOT NULL,
@@ -334,7 +356,14 @@ class SqliteMeshCore implements MeshCore {
 
   async getAppStats() {
     const db = await this.getDb();
-    const [localPostsRow, followingRow, conversationsRow, unreadRow] = await Promise.all([
+    const [
+      localPostsRow,
+      followingRow,
+      conversationsRow,
+      unreadRow,
+      mutedRow,
+      blockedRow
+    ] = await Promise.all([
       db.getFirstAsync<{ count: number }>(
         `SELECT COUNT(*) AS count
          FROM posts
@@ -357,6 +386,18 @@ class SqliteMeshCore implements MeshCore {
          WHERE recipient_pubkey = ?
            AND read_at_ms IS NULL`,
         localIdentity.pubkey
+      ),
+      db.getFirstAsync<{ count: number }>(
+        `SELECT COUNT(*) AS count
+         FROM muted_peers
+         WHERE owner_pubkey = ?`,
+        localIdentity.pubkey
+      ),
+      db.getFirstAsync<{ count: number }>(
+        `SELECT COUNT(*) AS count
+         FROM blocked_peers
+         WHERE owner_pubkey = ?`,
+        localIdentity.pubkey
       )
     ]);
 
@@ -364,7 +405,9 @@ class SqliteMeshCore implements MeshCore {
       localPostCount: localPostsRow?.count ?? 0,
       followingCount: followingRow?.count ?? 0,
       conversationCount: conversationsRow?.count ?? 0,
-      unreadCount: unreadRow?.count ?? 0
+      unreadCount: unreadRow?.count ?? 0,
+      mutedCount: mutedRow?.count ?? 0,
+      blockedCount: blockedRow?.count ?? 0
     };
   }
 
@@ -383,13 +426,27 @@ class SqliteMeshCore implements MeshCore {
        FROM posts
        JOIN profiles ON profiles.pubkey = posts.author_pubkey
        WHERE posts.author_pubkey = ?
-         OR posts.author_pubkey IN (
-           SELECT followee_pubkey
-           FROM follows
-           WHERE follower_pubkey = ?
+         OR (
+           posts.author_pubkey IN (
+             SELECT followee_pubkey
+             FROM follows
+             WHERE follower_pubkey = ?
+           )
+           AND posts.author_pubkey NOT IN (
+             SELECT peer_pubkey
+             FROM muted_peers
+             WHERE owner_pubkey = ?
+           )
+           AND posts.author_pubkey NOT IN (
+             SELECT peer_pubkey
+             FROM blocked_peers
+             WHERE owner_pubkey = ?
+           )
          )
        ORDER BY posts.created_at_ms DESC, posts.id ASC
        LIMIT ? OFFSET ?`,
+      localIdentity.pubkey,
+      localIdentity.pubkey,
       localIdentity.pubkey,
       localIdentity.pubkey,
       pageSize,
@@ -442,12 +499,26 @@ class SqliteMeshCore implements MeshCore {
            WHEN follows.followee_pubkey IS NULL THEN 0
            ELSE 1
          END AS is_following,
+         CASE
+           WHEN muted_peers.peer_pubkey IS NULL THEN 0
+           ELSE 1
+         END AS is_muted,
+         CASE
+           WHEN blocked_peers.peer_pubkey IS NULL THEN 0
+           ELSE 1
+         END AS is_blocked,
          COUNT(posts.id) AS post_count,
          MAX(posts.created_at_ms) AS last_post_at_ms
        FROM profiles
        LEFT JOIN follows
          ON follows.followee_pubkey = profiles.pubkey
          AND follows.follower_pubkey = ?
+       LEFT JOIN muted_peers
+         ON muted_peers.peer_pubkey = profiles.pubkey
+         AND muted_peers.owner_pubkey = ?
+       LEFT JOIN blocked_peers
+         ON blocked_peers.peer_pubkey = profiles.pubkey
+         AND blocked_peers.owner_pubkey = ?
        LEFT JOIN posts
          ON posts.author_pubkey = profiles.pubkey
        GROUP BY
@@ -455,12 +526,17 @@ class SqliteMeshCore implements MeshCore {
          profiles.handle,
          profiles.display_name,
          profiles.bio,
-         is_following
+         is_following,
+         is_muted,
+         is_blocked
        ORDER BY
          CASE WHEN profiles.pubkey = ? THEN 0 ELSE 1 END,
+         is_blocked ASC,
          is_following DESC,
          post_count DESC,
          profiles.display_name COLLATE NOCASE ASC`,
+      localIdentity.pubkey,
+      localIdentity.pubkey,
       localIdentity.pubkey,
       localIdentity.pubkey
     );
@@ -472,6 +548,8 @@ class SqliteMeshCore implements MeshCore {
       bio: row.bio ?? "",
       isSelf: row.pubkey === localIdentity.pubkey,
       isFollowing: row.is_following === 1,
+      isMuted: row.is_muted === 1,
+      isBlocked: row.is_blocked === 1,
       postCount: row.post_count,
       lastPostAtMs: row.last_post_at_ms,
       lastPostAt: row.last_post_at_ms ? formatTimestamp(row.last_post_at_ms) : null
@@ -504,6 +582,65 @@ class SqliteMeshCore implements MeshCore {
     );
   }
 
+  async mutePeer(peerPubkey: string) {
+    if (peerPubkey === localIdentity.pubkey) {
+      return;
+    }
+
+    const db = await this.getDb();
+    await db.runAsync(
+      `INSERT OR IGNORE INTO muted_peers (owner_pubkey, peer_pubkey, created_at_ms)
+       VALUES (?, ?, ?)`,
+      localIdentity.pubkey,
+      peerPubkey,
+      Date.now()
+    );
+  }
+
+  async unmutePeer(peerPubkey: string) {
+    const db = await this.getDb();
+    await db.runAsync(
+      `DELETE FROM muted_peers
+       WHERE owner_pubkey = ?
+         AND peer_pubkey = ?`,
+      localIdentity.pubkey,
+      peerPubkey
+    );
+  }
+
+  async blockPeer(peerPubkey: string) {
+    if (peerPubkey === localIdentity.pubkey) {
+      return;
+    }
+
+    const db = await this.getDb();
+    await db.runAsync(
+      `INSERT OR IGNORE INTO blocked_peers (owner_pubkey, peer_pubkey, created_at_ms)
+       VALUES (?, ?, ?)`,
+      localIdentity.pubkey,
+      peerPubkey,
+      Date.now()
+    );
+    await db.runAsync(
+      `DELETE FROM follows
+       WHERE follower_pubkey = ?
+         AND followee_pubkey = ?`,
+      localIdentity.pubkey,
+      peerPubkey
+    );
+  }
+
+  async unblockPeer(peerPubkey: string) {
+    const db = await this.getDb();
+    await db.runAsync(
+      `DELETE FROM blocked_peers
+       WHERE owner_pubkey = ?
+         AND peer_pubkey = ?`,
+      localIdentity.pubkey,
+      peerPubkey
+    );
+  }
+
   async listConversations() {
     const db = await this.getDb();
     const rows = await db.getAllAsync<ConversationRecord>(
@@ -527,6 +664,9 @@ class SqliteMeshCore implements MeshCore {
          WHEN messages.sender_pubkey = ? THEN messages.recipient_pubkey
          ELSE messages.sender_pubkey
        END
+       LEFT JOIN blocked_peers
+         ON blocked_peers.peer_pubkey = peer.pubkey
+         AND blocked_peers.owner_pubkey = ?
        JOIN direct_messages AS latest
          ON latest.id = (
            SELECT direct_messages.id
@@ -535,6 +675,7 @@ class SqliteMeshCore implements MeshCore {
            ORDER BY direct_messages.created_at_ms DESC, direct_messages.id DESC
            LIMIT 1
          )
+       WHERE blocked_peers.peer_pubkey IS NULL
        GROUP BY
          peer.pubkey,
          peer.display_name,
@@ -542,6 +683,7 @@ class SqliteMeshCore implements MeshCore {
          latest.body,
          latest.created_at_ms
        ORDER BY last_message_at_ms DESC, peer.pubkey ASC`,
+      localIdentity.pubkey,
       localIdentity.pubkey,
       localIdentity.pubkey
     );
@@ -558,6 +700,10 @@ class SqliteMeshCore implements MeshCore {
   }
 
   async getMessages(peerPubkey: string) {
+    if (await this.isBlocked(peerPubkey)) {
+      return [];
+    }
+
     const db = await this.getDb();
     const rows = await db.getAllAsync<MessageRecord>(
       `SELECT
@@ -606,6 +752,12 @@ class SqliteMeshCore implements MeshCore {
     if (!trimmedBody) {
       throw new Error("Message body cannot be empty.");
     }
+    if (peerPubkey === localIdentity.pubkey) {
+      throw new Error("Cannot message yourself.");
+    }
+    if (await this.isBlocked(peerPubkey)) {
+      throw new Error("Unblock this peer before messaging them.");
+    }
 
     const db = await this.getDb();
     const createdAtMs = Date.now();
@@ -625,6 +777,21 @@ class SqliteMeshCore implements MeshCore {
     );
 
     return id;
+  }
+
+  private async isBlocked(peerPubkey: string) {
+    const db = await this.getDb();
+    const row = await db.getFirstAsync<{ is_blocked: number }>(
+      `SELECT 1 AS is_blocked
+       FROM blocked_peers
+       WHERE owner_pubkey = ?
+         AND peer_pubkey = ?
+       LIMIT 1`,
+      localIdentity.pubkey,
+      peerPubkey
+    );
+
+    return row?.is_blocked === 1;
   }
 
   private async getDb() {
@@ -687,6 +854,10 @@ function hasNativeMeshCore(
     typeof candidate?.listPeers === "function" &&
     typeof candidate?.followPeer === "function" &&
     typeof candidate?.unfollowPeer === "function" &&
+    typeof candidate?.mutePeer === "function" &&
+    typeof candidate?.unmutePeer === "function" &&
+    typeof candidate?.blockPeer === "function" &&
+    typeof candidate?.unblockPeer === "function" &&
     typeof candidate?.listConversations === "function" &&
     typeof candidate?.getMessages === "function" &&
     typeof candidate?.markConversationRead === "function" &&
@@ -708,6 +879,10 @@ export function createMeshCore(): MeshCore {
       listPeers: () => nativeModule.listPeers(),
       followPeer: (peerPubkey) => nativeModule.followPeer(peerPubkey),
       unfollowPeer: (peerPubkey) => nativeModule.unfollowPeer(peerPubkey),
+      mutePeer: (peerPubkey) => nativeModule.mutePeer(peerPubkey),
+      unmutePeer: (peerPubkey) => nativeModule.unmutePeer(peerPubkey),
+      blockPeer: (peerPubkey) => nativeModule.blockPeer(peerPubkey),
+      unblockPeer: (peerPubkey) => nativeModule.unblockPeer(peerPubkey),
       listConversations: () => nativeModule.listConversations(),
       getMessages: (peerPubkey) => nativeModule.getMessages(peerPubkey),
       markConversationRead: (peerPubkey) => nativeModule.markConversationRead(peerPubkey),

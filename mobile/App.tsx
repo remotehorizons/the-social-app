@@ -33,8 +33,16 @@ const emptyStats: AppStats = {
   localPostCount: 0,
   followingCount: 0,
   conversationCount: 0,
-  unreadCount: 0
+  unreadCount: 0,
+  mutedCount: 0,
+  blockedCount: 0
 };
+
+const introPrompts = [
+  "Saw your profile and wanted to say hi. What are you building this week?",
+  "Your updates look aligned with what I care about. Want to trade notes?",
+  "I am curating a small high-signal circle here. Thought you should be in it."
+];
 
 export default function App() {
   const [core] = useState(() => createMeshCore());
@@ -60,7 +68,7 @@ export function AppScreen({ core }: AppScreenProps) {
   const [isPosting, setIsPosting] = useState(false);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
-  const [busyPeerPubkey, setBusyPeerPubkey] = useState<string | null>(null);
+  const [busyActionKey, setBusyActionKey] = useState<string | null>(null);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -80,8 +88,29 @@ export function AppScreen({ core }: AppScreenProps) {
   const selectedConversation =
     conversations.find((conversation) => conversation.peerPubkey === selectedPeerPubkey) ??
     null;
+  const selectedPeer =
+    peers.find((peer) => peer.pubkey === selectedPeerPubkey) ??
+    (selectedConversation
+      ? {
+          pubkey: selectedConversation.peerPubkey,
+          handle: selectedConversation.peerHandle,
+          displayName: selectedConversation.peerDisplayName,
+          bio: "",
+          isSelf: false,
+          isFollowing: true,
+          isMuted: false,
+          isBlocked: false,
+          postCount: 0,
+          lastPostAtMs: null,
+          lastPostAt: null
+        }
+      : null);
   const onboardingReady =
     stats.followingCount >= 2 && stats.localPostCount >= 1 && stats.conversationCount >= 1;
+  const launchTasks = buildLaunchTasks(stats, identity);
+  const launchCompletion = Math.round(
+    (launchTasks.filter((task) => task.done).length / launchTasks.length) * 100
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -130,6 +159,7 @@ export function AppScreen({ core }: AppScreenProps) {
 
     const nextSelectedPeerPubkey = chooseSelectedPeer(
       snapshot.conversations,
+      snapshot.peers,
       selectedPeerPubkey
     );
     setSelectedPeerPubkey(nextSelectedPeerPubkey);
@@ -158,6 +188,9 @@ export function AppScreen({ core }: AppScreenProps) {
       setMessages(nextMessages);
       setConversations(nextConversations);
       setStats(nextStats);
+      if (nextMessages.length === 0 && messageText.length === 0) {
+        setMessageText(introPrompts[0] ?? "");
+      }
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
@@ -209,12 +242,12 @@ export function AppScreen({ core }: AppScreenProps) {
   };
 
   const toggleFollow = async (peer: NetworkPeer) => {
-    if (peer.isSelf || busyPeerPubkey) {
+    if (peer.isSelf || peer.isBlocked || busyActionKey) {
       return;
     }
 
     try {
-      setBusyPeerPubkey(peer.pubkey);
+      setBusyActionKey(`follow:${peer.pubkey}`);
       setErrorMessage(null);
       if (peer.isFollowing) {
         await core.unfollowPeer(peer.pubkey);
@@ -225,8 +258,70 @@ export function AppScreen({ core }: AppScreenProps) {
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
-      setBusyPeerPubkey(null);
+      setBusyActionKey(null);
     }
+  };
+
+  const toggleMute = async (peer: NetworkPeer) => {
+    if (peer.isSelf || peer.isBlocked || busyActionKey) {
+      return;
+    }
+
+    try {
+      setBusyActionKey(`mute:${peer.pubkey}`);
+      setErrorMessage(null);
+      if (peer.isMuted) {
+        await core.unmutePeer(peer.pubkey);
+      } else {
+        await core.mutePeer(peer.pubkey);
+      }
+      await refreshAppData(selectedPeerPubkey === peer.pubkey ? peer.pubkey : selectedPeerPubkey);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setBusyActionKey(null);
+    }
+  };
+
+  const toggleBlock = async (peer: NetworkPeer) => {
+    if (peer.isSelf || busyActionKey) {
+      return;
+    }
+
+    try {
+      setBusyActionKey(`block:${peer.pubkey}`);
+      setErrorMessage(null);
+      if (peer.isBlocked) {
+        await core.unblockPeer(peer.pubkey);
+      } else {
+        await core.blockPeer(peer.pubkey);
+      }
+
+      if (selectedPeerPubkey === peer.pubkey && !peer.isBlocked) {
+        setSelectedPeerPubkey(null);
+        setMessageText("");
+      }
+
+      await refreshAppData(
+        selectedPeerPubkey === peer.pubkey && !peer.isBlocked ? null : selectedPeerPubkey
+      );
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setBusyActionKey(null);
+    }
+  };
+
+  const startConversation = (peer: NetworkPeer, prompt?: string) => {
+    if (peer.isSelf || peer.isBlocked) {
+      return;
+    }
+
+    setSelectedPeerPubkey(peer.pubkey);
+    setActiveTab("messages");
+    setMessageText(prompt ?? "");
+    setMessages([]);
+    void loadConversation(peer.pubkey);
   };
 
   const sendMessage = async () => {
@@ -273,7 +368,25 @@ export function AppScreen({ core }: AppScreenProps) {
     setColorMode((currentMode) => (currentMode === "light" ? "dark" : "light"));
   };
 
-  const networkSuggestions = peers.filter((peer) => !peer.isSelf && !peer.isFollowing);
+  const jumpToTask = (taskAction: LaunchTask["action"]) => {
+    if (taskAction === "profile") {
+      setActiveTab("network");
+      return;
+    }
+    if (taskAction === "follow") {
+      setActiveTab("network");
+      return;
+    }
+    if (taskAction === "post") {
+      setActiveTab("feed");
+      return;
+    }
+    setActiveTab("messages");
+  };
+
+  const networkSuggestions = peers.filter(
+    (peer) => !peer.isSelf && !peer.isFollowing && !peer.isBlocked
+  );
 
   return (
     <SafeAreaView style={styles.safe} testID="app-shell">
@@ -339,15 +452,42 @@ export function AppScreen({ core }: AppScreenProps) {
 
         {activeTab === "feed" ? (
           <>
-            {!onboardingReady ? (
-              <View style={styles.callout}>
-                <Text style={styles.calloutTitle}>FIRST SESSION CHECKLIST</Text>
-                <Text style={styles.calloutBody}>
-                  Follow at least two people, publish one short update, and send one direct
-                  message. That is the minimum loop that makes a social product sticky.
-                </Text>
+            <View style={styles.callout}>
+              <View style={styles.launchHeader}>
+                <View>
+                  <Text style={styles.calloutTitle}>LAUNCH READINESS</Text>
+                  <Text style={styles.calloutBody}>
+                    One-week market plan: tighten trust, create first contact fast, and make
+                    the first session feel complete.
+                  </Text>
+                </View>
+                <Text style={styles.launchScore}>{launchCompletion}%</Text>
               </View>
-            ) : null}
+              <View style={styles.launchTaskList}>
+                {launchTasks.map((task) => (
+                  <Pressable
+                    key={task.label}
+                    onPress={() => jumpToTask(task.action)}
+                    style={styles.launchTask}
+                    testID={`launch-task-${task.action}`}
+                  >
+                    <Text style={styles.launchTaskStatus}>
+                      {task.done ? "DONE" : "OPEN"}
+                    </Text>
+                    <View style={styles.launchTaskCopy}>
+                      <Text style={styles.launchTaskTitle}>{task.label}</Text>
+                      <Text style={styles.launchTaskBody}>{task.body}</Text>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+              {!onboardingReady ? (
+                <Text style={styles.helperText}>
+                  Do these in order. Social products fail when the first user never reaches a
+                  meaningful interaction loop.
+                </Text>
+              ) : null}
+            </View>
 
             <View style={styles.composer}>
               <Text style={styles.sectionTitle}>POST TO YOUR CIRCLE</Text>
@@ -461,21 +601,27 @@ export function AppScreen({ core }: AppScreenProps) {
             <View style={styles.panel}>
               <Text style={styles.sectionTitle}>GROWTH PLAN</Text>
               <Text style={styles.calloutBody}>
-                Successful calm social products win on trust, not infinite reach. The loop
-                here is simple: identity, relevant follows, useful posts, and fast replies.
+                Successful calm social products win on trust, not infinite reach. Ship the
+                small graph, make intros easy, and let people tune noise with mute and block.
+              </Text>
+              <Text style={styles.helperText}>
+                Safety controls shipped here affect the feed and messaging state immediately.
               </Text>
             </View>
 
             {networkSuggestions.length > 0 ? (
               <View style={styles.panel}>
                 <Text style={styles.sectionTitle}>SUGGESTED CONNECTIONS</Text>
-                {networkSuggestions.map((peer) => (
+                {networkSuggestions.map((peer, index) => (
                   <PeerRow
                     key={peer.pubkey}
                     peer={peer}
                     palette={palette}
-                    busy={busyPeerPubkey === peer.pubkey}
-                    onPress={() => void toggleFollow(peer)}
+                    busyActionKey={busyActionKey}
+                    onToggleFollow={() => void toggleFollow(peer)}
+                    onToggleMute={() => void toggleMute(peer)}
+                    onToggleBlock={() => void toggleBlock(peer)}
+                    onMessage={() => startConversation(peer, introPrompts[index % 3])}
                   />
                 ))}
               </View>
@@ -488,8 +634,11 @@ export function AppScreen({ core }: AppScreenProps) {
                   key={peer.pubkey}
                   peer={peer}
                   palette={palette}
-                  busy={busyPeerPubkey === peer.pubkey}
-                  onPress={() => void toggleFollow(peer)}
+                  busyActionKey={busyActionKey}
+                  onToggleFollow={() => void toggleFollow(peer)}
+                  onToggleMute={() => void toggleMute(peer)}
+                  onToggleBlock={() => void toggleBlock(peer)}
+                  onMessage={() => startConversation(peer)}
                 />
               ))}
             </View>
@@ -535,15 +684,14 @@ export function AppScreen({ core }: AppScreenProps) {
               )}
             </View>
 
-            {selectedConversation ? (
+            {selectedPeer ? (
               <View style={styles.threadPanel}>
                 <View style={styles.threadHeader}>
-                  <Text style={styles.threadTitle}>
-                    {selectedConversation.peerDisplayName}
-                  </Text>
-                  <Text style={styles.threadSubtitle}>
-                    {selectedConversation.peerHandle}
-                  </Text>
+                  <Text style={styles.threadTitle}>{selectedPeer.displayName}</Text>
+                  <Text style={styles.threadSubtitle}>{selectedPeer.handle}</Text>
+                  {selectedPeer.bio ? (
+                    <Text style={styles.threadBio}>{selectedPeer.bio}</Text>
+                  ) : null}
                 </View>
 
                 <FlatList
@@ -557,15 +705,33 @@ export function AppScreen({ core }: AppScreenProps) {
                     isLoadingMessages ? (
                       <Text style={styles.emptyState}>LOADING CONVERSATION</Text>
                     ) : (
-                      <Text style={styles.emptyState}>NO MESSAGES IN THIS THREAD</Text>
+                      <Text style={styles.emptyState}>
+                        NO MESSAGES IN THIS THREAD YET. SEND A CLEAR FIRST NOTE.
+                      </Text>
                     )
                   }
                 />
 
+                {messages.length === 0 && !selectedPeer.isBlocked ? (
+                  <View style={styles.introPromptPanel}>
+                    <Text style={styles.sectionTitle}>FIRST CONTACT PROMPTS</Text>
+                    {introPrompts.map((prompt) => (
+                      <Pressable
+                        key={prompt}
+                        onPress={() => setMessageText(prompt)}
+                        style={styles.introPromptButton}
+                        testID={`intro-prompt-${prompt}`}
+                      >
+                        <Text style={styles.introPromptText}>{prompt}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
+
                 <View style={styles.composer}>
                   <Text style={styles.sectionTitle}>REPLY FAST</Text>
                   <TextInput
-                    placeholder={`Message ${selectedConversation.peerHandle}...`}
+                    placeholder={`Message ${selectedPeer.handle}...`}
                     placeholderTextColor={palette.textMuted}
                     multiline
                     style={styles.input}
@@ -580,16 +746,22 @@ export function AppScreen({ core }: AppScreenProps) {
                     </Text>
                     <Pressable
                       onPress={() => void sendMessage()}
-                      disabled={!canSendMessage || isSendingMessage}
+                      disabled={
+                        !canSendMessage || isSendingMessage || Boolean(selectedPeer.isBlocked)
+                      }
                       style={({ pressed }) => [
                         styles.postButton,
-                        (!canSendMessage || isSendingMessage || pressed) &&
+                        (!canSendMessage || isSendingMessage || selectedPeer.isBlocked || pressed) &&
                           styles.postButtonDisabled
                       ]}
                       testID="send-message-button"
                     >
                       <Text style={styles.postButtonText}>
-                        {isSendingMessage ? "SENDING" : "SEND"}
+                        {selectedPeer.isBlocked
+                          ? "BLOCKED"
+                          : isSendingMessage
+                            ? "SENDING"
+                            : "SEND"}
                       </Text>
                     </Pressable>
                   </View>
@@ -628,7 +800,11 @@ async function loadSnapshot(
     core.listConversations()
   ]);
 
-  const nextSelectedPeerPubkey = chooseSelectedPeer(conversations, selectedPeerPubkey ?? null);
+  const nextSelectedPeerPubkey = chooseSelectedPeer(
+    conversations,
+    peers,
+    selectedPeerPubkey ?? null
+  );
   const messages = nextSelectedPeerPubkey
     ? await core.getMessages(nextSelectedPeerPubkey)
     : [];
@@ -645,13 +821,56 @@ async function loadSnapshot(
   };
 }
 
+type LaunchTask = {
+  action: "profile" | "follow" | "post" | "message";
+  body: string;
+  done: boolean;
+  label: string;
+};
+
+function buildLaunchTasks(
+  stats: AppStats,
+  identity: Identity | null
+): LaunchTask[] {
+  const hasProfile = Boolean(identity?.displayName.trim() && identity.bio.trim().length > 0);
+
+  return [
+    {
+      action: "profile",
+      label: "Finish your profile",
+      body: "A clear identity is the first filter for who follows and replies.",
+      done: hasProfile
+    },
+    {
+      action: "follow",
+      label: "Curate your circle",
+      body: "Follow at least two relevant peers so the feed has signal.",
+      done: stats.followingCount >= 2
+    },
+    {
+      action: "post",
+      label: "Publish one useful post",
+      body: "The first useful update gives people a reason to engage.",
+      done: stats.localPostCount >= 1
+    },
+    {
+      action: "message",
+      label: "Start one direct thread",
+      body: "The first reply loop is what turns curiosity into retention.",
+      done: stats.conversationCount >= 1
+    }
+  ];
+}
+
 function chooseSelectedPeer(
   conversations: ConversationPreview[],
+  peers: NetworkPeer[],
   selectedPeerPubkey: string | null
 ) {
   if (
     selectedPeerPubkey &&
-    conversations.some((conversation) => conversation.peerPubkey === selectedPeerPubkey)
+    (conversations.some((conversation) => conversation.peerPubkey === selectedPeerPubkey) ||
+      peers.some((peer) => peer.pubkey === selectedPeerPubkey && !peer.isBlocked))
   ) {
     return selectedPeerPubkey;
   }
@@ -681,15 +900,24 @@ function MetricCard({
 function PeerRow({
   peer,
   palette,
-  busy,
-  onPress
+  busyActionKey,
+  onToggleFollow,
+  onToggleMute,
+  onToggleBlock,
+  onMessage
 }: {
   peer: NetworkPeer;
   palette: (typeof themes)[ColorMode];
-  busy: boolean;
-  onPress: () => void;
+  busyActionKey: string | null;
+  onToggleFollow: () => void;
+  onToggleMute: () => void;
+  onToggleBlock: () => void;
+  onMessage: () => void;
 }) {
   const styles = createStyles(palette);
+  const followBusy = busyActionKey === `follow:${peer.pubkey}`;
+  const muteBusy = busyActionKey === `mute:${peer.pubkey}`;
+  const blockBusy = busyActionKey === `block:${peer.pubkey}`;
 
   return (
     <View style={styles.peerRow}>
@@ -697,6 +925,8 @@ function PeerRow({
         <View style={styles.peerTitleRow}>
           <Text style={styles.peerName}>{peer.displayName}</Text>
           <Text style={styles.peerHandle}>{peer.handle}</Text>
+          {peer.isMuted ? <Text style={styles.peerFlag}>MUTED</Text> : null}
+          {peer.isBlocked ? <Text style={styles.peerFlag}>BLOCKED</Text> : null}
         </View>
         <Text style={styles.peerBio}>{peer.bio || "No profile bio yet."}</Text>
         <Text style={styles.peerMeta}>
@@ -704,19 +934,66 @@ function PeerRow({
           {peer.lastPostAt ? ` • last post ${peer.lastPostAt}` : ""}
         </Text>
       </View>
-      <Pressable
-        disabled={peer.isSelf || busy}
-        onPress={onPress}
-        style={({ pressed }) => [
-          styles.followButton,
-          (peer.isSelf || busy || pressed) && styles.followButtonDisabled
-        ]}
-        testID={`follow-toggle-${peer.pubkey}`}
-      >
-        <Text style={styles.followButtonText}>
-          {peer.isSelf ? "YOU" : busy ? "..." : peer.isFollowing ? "UNFOLLOW" : "FOLLOW"}
-        </Text>
-      </Pressable>
+      <View style={styles.peerActions}>
+        <Pressable
+          disabled={peer.isSelf || peer.isBlocked || followBusy}
+          onPress={onToggleFollow}
+          style={({ pressed }) => [
+            styles.followButton,
+            (peer.isSelf || peer.isBlocked || followBusy || pressed) &&
+              styles.followButtonDisabled
+          ]}
+          testID={`follow-toggle-${peer.pubkey}`}
+        >
+          <Text style={styles.followButtonText}>
+            {peer.isSelf
+              ? "YOU"
+              : followBusy
+                ? "..."
+                : peer.isFollowing
+                  ? "UNFOLLOW"
+                  : "FOLLOW"}
+          </Text>
+        </Pressable>
+        <Pressable
+          disabled={peer.isSelf || peer.isBlocked}
+          onPress={onMessage}
+          style={({ pressed }) => [
+            styles.secondaryActionButton,
+            (peer.isSelf || peer.isBlocked || pressed) && styles.followButtonDisabled
+          ]}
+          testID={`message-peer-${peer.pubkey}`}
+        >
+          <Text style={styles.secondaryActionText}>MESSAGE</Text>
+        </Pressable>
+        <Pressable
+          disabled={peer.isSelf || peer.isBlocked || muteBusy}
+          onPress={onToggleMute}
+          style={({ pressed }) => [
+            styles.secondaryActionButton,
+            (peer.isSelf || peer.isBlocked || muteBusy || pressed) &&
+              styles.followButtonDisabled
+          ]}
+          testID={`mute-toggle-${peer.pubkey}`}
+        >
+          <Text style={styles.secondaryActionText}>
+            {muteBusy ? "..." : peer.isMuted ? "UNMUTE" : "MUTE"}
+          </Text>
+        </Pressable>
+        <Pressable
+          disabled={peer.isSelf || blockBusy}
+          onPress={onToggleBlock}
+          style={({ pressed }) => [
+            styles.secondaryActionButton,
+            (peer.isSelf || blockBusy || pressed) && styles.followButtonDisabled
+          ]}
+          testID={`block-toggle-${peer.pubkey}`}
+        >
+          <Text style={styles.secondaryActionText}>
+            {blockBusy ? "..." : peer.isBlocked ? "UNBLOCK" : "BLOCK"}
+          </Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -849,6 +1126,53 @@ function createStyles(palette: (typeof themes)[ColorMode]) {
       backgroundColor: palette.panel,
       padding: theme.spacing.md,
       gap: theme.spacing.xs
+    },
+    launchHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      gap: theme.spacing.md,
+      alignItems: "flex-start"
+    },
+    launchScore: {
+      fontFamily: "Courier",
+      color: palette.textPrimary,
+      fontSize: 24,
+      fontWeight: "700"
+    },
+    launchTaskList: {
+      gap: theme.spacing.sm
+    },
+    launchTask: {
+      borderWidth: 1,
+      borderColor: palette.border,
+      borderRadius: theme.radius.sm,
+      padding: theme.spacing.sm,
+      backgroundColor: palette.bg,
+      flexDirection: "row",
+      gap: theme.spacing.sm,
+      alignItems: "flex-start"
+    },
+    launchTaskStatus: {
+      fontFamily: "Courier",
+      color: palette.textMuted,
+      fontSize: 11,
+      width: 36
+    },
+    launchTaskCopy: {
+      flex: 1,
+      gap: 4
+    },
+    launchTaskTitle: {
+      fontFamily: "Courier",
+      color: palette.textPrimary,
+      fontWeight: "700",
+      fontSize: 12
+    },
+    launchTaskBody: {
+      fontFamily: "Courier",
+      color: palette.textMuted,
+      fontSize: 12,
+      lineHeight: 18
     },
     calloutTitle: {
       fontFamily: "Courier",
@@ -998,6 +1322,15 @@ function createStyles(palette: (typeof themes)[ColorMode]) {
       gap: theme.spacing.sm,
       flexWrap: "wrap"
     },
+    peerFlag: {
+      fontFamily: "Courier",
+      color: palette.textMuted,
+      fontSize: 11,
+      borderWidth: 1,
+      borderColor: palette.border,
+      paddingHorizontal: 4,
+      paddingVertical: 1
+    },
     peerName: {
       fontFamily: "Courier",
       color: palette.textPrimary,
@@ -1020,6 +1353,10 @@ function createStyles(palette: (typeof themes)[ColorMode]) {
       color: palette.textMuted,
       fontSize: 11
     },
+    peerActions: {
+      width: 92,
+      gap: theme.spacing.xs
+    },
     followButton: {
       borderWidth: 1,
       borderColor: palette.border,
@@ -1036,6 +1373,21 @@ function createStyles(palette: (typeof themes)[ColorMode]) {
       color: palette.accentText,
       fontWeight: "700",
       fontSize: 11
+    },
+    secondaryActionButton: {
+      borderWidth: 1,
+      borderColor: palette.border,
+      backgroundColor: palette.bg,
+      borderRadius: theme.radius.sm,
+      paddingHorizontal: theme.spacing.sm,
+      paddingVertical: theme.spacing.sm
+    },
+    secondaryActionText: {
+      fontFamily: "Courier",
+      color: palette.textPrimary,
+      fontWeight: "700",
+      fontSize: 11,
+      textAlign: "center"
     },
     messagesLayout: {
       flex: 1,
@@ -1120,9 +1472,35 @@ function createStyles(palette: (typeof themes)[ColorMode]) {
       color: palette.textMuted,
       fontSize: 12
     },
+    threadBio: {
+      fontFamily: "Courier",
+      color: palette.textMuted,
+      fontSize: 12,
+      lineHeight: 18
+    },
     messagesList: {
       gap: theme.spacing.sm,
       paddingBottom: theme.spacing.sm
+    },
+    introPromptPanel: {
+      borderWidth: 1,
+      borderColor: palette.border,
+      borderRadius: theme.radius.sm,
+      backgroundColor: palette.bg,
+      padding: theme.spacing.sm,
+      gap: theme.spacing.xs
+    },
+    introPromptButton: {
+      borderWidth: 1,
+      borderColor: palette.border,
+      borderRadius: theme.radius.sm,
+      padding: theme.spacing.sm
+    },
+    introPromptText: {
+      fontFamily: "Courier",
+      color: palette.textPrimary,
+      fontSize: 12,
+      lineHeight: 18
     }
   });
 }

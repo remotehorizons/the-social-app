@@ -51,3 +51,17 @@ The near-term loop is:
 3. Add notifications for new direct replies and followed-peer posts.
 4. Add mute/block controls before opening the graph further.
 5. Wire the Rust core into the mobile experience so these flows survive beyond the local demo path.
+
+## One-week market sprint
+
+If the goal is shipping in one week, the top three missing pieces were:
+
+1. Trust controls so users can shape noise and defend their graph.
+2. A first-contact flow so followed peers can become real conversations fast.
+3. An onboarding surface that turns the product thesis into concrete actions.
+
+This pass implemented all three in the mobile app:
+
+- mute and block controls now exist in the network view and affect feed/message visibility
+- followed peers can now be messaged before a thread exists, with first-contact prompts
+- the feed now includes a launch-readiness checklist with action-oriented tasks

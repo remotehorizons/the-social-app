@@ -44,6 +44,8 @@ export type NetworkPeer = {
   bio: string;
   isSelf: boolean;
   isFollowing: boolean;
+  isMuted: boolean;
+  isBlocked: boolean;
   postCount: number;
   lastPostAtMs: number | null;
   lastPostAt: string | null;
@@ -54,4 +56,6 @@ export type AppStats = {
   followingCount: number;
   conversationCount: number;
   unreadCount: number;
+  mutedCount: number;
+  blockedCount: number;
 };
