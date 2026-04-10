@@ -59,3 +59,11 @@ export type AppStats = {
   mutedCount: number;
   blockedCount: number;
 };
+
+export type TestPersona = {
+  bio: string;
+  displayName: string;
+  handle: string;
+  id: string;
+  pubkey: string;
+};

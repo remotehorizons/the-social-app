@@ -6,7 +6,8 @@ import {
   DirectMessage,
   Identity,
   NetworkPeer,
-  Post
+  Post,
+  TestPersona
 } from "../types";
 
 type MeshCore = {
@@ -95,14 +96,33 @@ type PeerRecord = {
   last_post_at_ms: number | null;
 };
 
-const DB_NAME = "meshsocial.db";
+const TEST_PERSONAS: TestPersona[] = [
+  {
+    id: "you",
+    pubkey: "local-user-pubkey",
+    handle: "@you",
+    displayName: "You",
+    bio: "Building a calmer peer-to-peer social graph."
+  },
+  {
+    id: "harbor",
+    pubkey: "local-harbor-pubkey",
+    handle: "@harbor",
+    displayName: "Harbor",
+    bio: "Collecting serious people into a low-noise product circle."
+  },
+  {
+    id: "mira",
+    pubkey: "local-mira-pubkey",
+    handle: "@mira",
+    displayName: "Mira",
+    bio: "Testing onboarding, messaging, and what makes retention work."
+  }
+];
 
-const localIdentity: Identity = {
-  pubkey: "local-user-pubkey",
-  handle: "@you",
-  displayName: "You",
-  bio: "Building a calmer peer-to-peer social graph."
-};
+const activePersona = resolvePersona();
+const DB_NAME = `meshsocial-${activePersona.id}.db`;
+const localIdentity: Identity = toIdentity(activePersona);
 
 const defaultFriendIdentity: Identity = {
   pubkey: "peer-blue-penguin",
@@ -113,6 +133,7 @@ const defaultFriendIdentity: Identity = {
 
 const seedProfiles: Identity[] = [
   localIdentity,
+  ...TEST_PERSONAS.filter((persona) => persona.id !== activePersona.id).map(toIdentity),
   defaultFriendIdentity,
   {
     pubkey: "peer-atlas",
@@ -841,6 +862,20 @@ function conversationIdFor(firstPubkey: string, secondPubkey: string) {
   return [firstPubkey, secondPubkey].sort().join(":");
 }
 
+function toIdentity(persona: TestPersona): Identity {
+  return {
+    pubkey: persona.pubkey,
+    handle: persona.handle,
+    displayName: persona.displayName,
+    bio: persona.bio
+  };
+}
+
+function resolvePersona() {
+  const personaId = process.env.EXPO_PUBLIC_TEST_PERSONA ?? TEST_PERSONAS[0]!.id;
+  return TEST_PERSONAS.find((persona) => persona.id === personaId) ?? TEST_PERSONAS[0]!;
+}
+
 function hasNativeMeshCore(
   candidate: NativeMeshSocialCoreModule
 ): candidate is Required<NativeMeshSocialCoreModule> {
@@ -893,4 +928,5 @@ export function createMeshCore(): MeshCore {
   return new SqliteMeshCore();
 }
 
+export { TEST_PERSONAS };
 export type { MeshCore };

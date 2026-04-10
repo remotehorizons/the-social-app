@@ -1,0 +1,55 @@
+{
+  "cli": {
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "APP_VARIANT": "preview",
+        "EXPO_PUBLIC_TEST_PERSONA": "you"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "APP_VARIANT": "preview",
+        "EXPO_PUBLIC_TEST_PERSONA": "you"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "preview-harbor": {
+      "distribution": "internal",
+      "env": {
+        "APP_VARIANT": "preview",
+        "EXPO_PUBLIC_TEST_PERSONA": "harbor"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "preview-mira": {
+      "distribution": "internal",
+      "env": {
+        "APP_VARIANT": "preview",
+        "EXPO_PUBLIC_TEST_PERSONA": "mira"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "APP_VARIANT": "production",
+        "EXPO_PUBLIC_TEST_PERSONA": "you"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
